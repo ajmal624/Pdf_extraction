@@ -3,13 +3,10 @@ import pdfplumber
 import pandas as pd
 from pdf2image import convert_from_bytes
 import pytesseract
-import io
 from PIL import Image
-import cv2
-import numpy as np
 
 st.set_page_config(page_title="PDF Extractor App", layout="wide")
-st.title("📄 PDF Extractor with OCR Support")
+st.title("📄 PDF Extractor with OCR Support (No OpenCV)")
 
 uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
 
@@ -76,17 +73,12 @@ if uploaded_file:
         if pages:
             ocr_data = {}
             for page in pages:
-                # Preprocess image
-                cv_image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
-                gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
-                thresh = cv2.adaptiveThreshold(
-                    gray, 255,
-                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY, 11, 2
-                )
+                # Convert page to grayscale image
+                gray_image = page.convert('L')  # L mode = grayscale
 
                 # OCR using pytesseract
-                text = pytesseract.image_to_string(thresh)
+                text = pytesseract.image_to_string(gray_image)
+
                 for line in text.splitlines():
                     line = line.strip()
                     if not line:
