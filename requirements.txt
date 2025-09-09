@@ -5,4 +5,4 @@ pytesseract
 pdf2image
 Pillow
 poppler-utils
-tesseract-ocr
+
