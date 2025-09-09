@@ -6,7 +6,7 @@ import pytesseract
 from PIL import Image
 
 st.set_page_config(page_title="PDF Extractor App", layout="wide")
-st.title("📄 PDF Extractor with OCR/Table Support (No OpenCV)")
+st.title("📄 PDF Extractor with OCR Table Support")
 
 uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
 
@@ -58,9 +58,9 @@ if uploaded_file:
             mime="text/csv"
         )
 
-    # ----------------------- OCR/Table Extraction (No ':' Condition) -----------------------
-    if st.button("OCR/Table Extraction to CSV"):
-        st.info("🔍 Performing OCR... This may take a few seconds.")
+    # ----------------------- OCR Table Extraction -----------------------
+    if st.button("OCR Table Extraction to CSV"):
+        st.info("🔍 Performing OCR Table extraction... This may take a few seconds.")
 
         try:
             pages = convert_from_bytes(uploaded_file.read())
@@ -69,45 +69,41 @@ if uploaded_file:
             pages = []
 
         if pages:
-            ocr_data = {}
-            for page_num, page in enumerate(pages, start=1):
-                # Convert page to grayscale
+            table_data = {}
+            for page in pages:
                 gray_image = page.convert("L")
-                # OCR text
                 text = pytesseract.image_to_string(gray_image)
-                # Split lines
                 lines = [line.strip() for line in text.splitlines() if line.strip()]
-                
-                # For OCR/Table extraction, treat every **line as field-value pair**:
-                # The first word or phrase until a space is field, rest is value
-                for line in lines:
-                    parts = line.split(maxsplit=1)
-                    if len(parts) == 2:
-                        field, value = parts
-                    else:
-                        field = parts[0]
-                        value = ""
-                    # Only store if field is not empty
-                    if field:
-                        # If field already exists, append with separator
-                        if field in ocr_data:
-                            ocr_data[field] += " | " + value
-                        else:
-                            ocr_data[field] = value
 
-            ocr_data["Filename"] = uploaded_file.name
-            df_ocr = pd.DataFrame([ocr_data])
+                # Only process lines in table format (assume every 3 lines: ignore first, 2nd=row of fields, 3rd=row of values)
+                i = 0
+                while i + 2 < len(lines):
+                    # field row
+                    fields = lines[i+1].split()
+                    # value row
+                    values = lines[i+2].split()
+                    # Map field -> value (match by index)
+                    for idx, field in enumerate(fields):
+                        value = values[idx] if idx < len(values) else ""
+                        if field in table_data:
+                            table_data[field] += " | " + value
+                        else:
+                            table_data[field] = value
+                    i += 3  # move to next table block
+
+            table_data["Filename"] = uploaded_file.name
+            df_ocr = pd.DataFrame([table_data])
             df_ocr = df_ocr.dropna(axis=1, how="all")
 
-            st.subheader("✅ OCR/Table Extraction Result")
+            st.subheader("✅ OCR Table Extraction Result")
             st.dataframe(df_ocr)
 
             csv_ocr = df_ocr.to_csv(index=False, encoding="utf-8-sig")
             st.download_button(
-                label="📥 Download CSV (OCR Extraction)",
+                label="📥 Download CSV (OCR Table Extraction)",
                 data=csv_ocr,
-                file_name="ocr_extracted_data.csv",
+                file_name="ocr_table_extracted_data.csv",
                 mime="text/csv"
             )
         else:
-            st.warning("⚠️ No pages could be converted to images. OCR extraction failed.")
+            st.warning("⚠️ No pages could be converted to images. OCR table extraction failed.")
