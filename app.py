@@ -19,6 +19,7 @@ if not uploaded_files:
 rows = []
 all_field_names = set()
 
+# -------- Text Extraction Function --------
 def extract_text(file_bytes):
     text = ""
     try:
@@ -40,31 +41,24 @@ def extract_text(file_bytes):
 
     return text.strip() if text.strip() else None
 
-def parse_field_value(text):
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+# -------- Strict Field:Value Parsing --------
+def parse_field_value_strict(text):
+    """
+    Extract field-value pairs strictly from 'Field : Value' lines.
+    Lines without ':' are ignored.
+    """
     fields = {}
-    current_field = None
-
-    for line in lines:
-        if ":" in line:
-            # Split at first colon only
-            parts = line.split(":", 1)
-            field_name = parts[0].strip()
-            value = parts[1].strip() if len(parts) > 1 else "NAN"
-            fields[field_name] = value if value else "NAN"
-            current_field = field_name
-        elif current_field:
-            # Multi-line value continuation
-            fields[current_field] += " " + line
-
-    # Clean all values
-    for k, v in fields.items():
-        if not v.strip():
-            fields[k] = "NAN"
-        else:
-            fields[k] = " ".join(v.split())  # remove extra spaces/newlines
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue  # ignore lines without colon
+        parts = line.split(":", 1)
+        field_name = parts[0].strip()
+        value = parts[1].strip() if len(parts) > 1 else "NAN"
+        fields[field_name] = value if value else "NAN"
     return fields
 
+# -------- Process Each File --------
 for file in uploaded_files:
     file_bytes = file.read()
     text = extract_text(file_bytes)
@@ -73,20 +67,20 @@ for file in uploaded_files:
         st.error(f"❌ Could not extract text from {file.name}")
         continue
 
-    parsed_fields = parse_field_value(text)
+    parsed_fields = parse_field_value_strict(text)
     parsed_fields["Filename"] = file.name
     rows.append(parsed_fields)
     all_field_names.update(parsed_fields.keys())
 
-# Build DataFrame with dynamic headers
+# -------- Build DataFrame with Dynamic Headers --------
 dynamic_headers = ["Filename"] + sorted([h for h in all_field_names if h != "Filename"])
 df = pd.DataFrame(rows, columns=dynamic_headers).fillna("NAN")
 
-# Preview extracted data
+# -------- Preview Table --------
 st.subheader("📊 Extracted Data Preview")
 st.dataframe(df, use_container_width=True)
 
-# CSV download
+# -------- CSV Download --------
 csv = df.to_csv(index=False).encode("utf-8")
 st.download_button(
     "⬇️ Download CSV",
