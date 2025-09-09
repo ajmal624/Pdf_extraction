@@ -2,14 +2,12 @@ import streamlit as st
 import pdfplumber
 import pytesseract
 from pdf2image import convert_from_bytes
-import re
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="Dynamic PDF Field Extractor", layout="wide")
-st.title("📄 Dynamic PDF Field Extractor → CSV")
+st.set_page_config(page_title="PDF Field Extractor", layout="wide")
+st.title("📄 PDF Field:Value Extractor → CSV")
 
-# Upload PDFs
 uploaded_files = st.file_uploader(
     "Upload PDF files", type=["pdf"], accept_multiple_files=True
 )
@@ -19,9 +17,8 @@ if not uploaded_files:
     st.stop()
 
 rows = []
-dynamic_headers = set()
+all_field_names = set()
 
-# --- Helper: Extract text from PDF (with OCR fallback) ---
 def extract_text(file_bytes):
     text = ""
     try:
@@ -32,48 +29,42 @@ def extract_text(file_bytes):
                     text += page_text + "\n"
     except:
         text = ""
+
     if text.strip():
         return text.strip()
 
-    # OCR fallback
+    # OCR fallback for scanned PDFs
     images = convert_from_bytes(file_bytes)
     for img in images:
         text += pytesseract.image_to_string(img) + "\n"
+
     return text.strip() if text.strip() else None
 
-# --- Helper: Clean values ---
-def clean_value(value):
-    value = value.strip()
-    # Dates → YYYY-MM-DD
-    if re.match(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", value):
-        try:
-            return pd.to_datetime(value, errors="coerce").strftime("%Y-%m-%d")
-        except:
-            return value
-    # Currency → numeric only
-    if "$" in value or value.replace(",", "").replace(".", "").isdigit():
-        return value.replace("$", "").replace(",", "").strip()
-    if value == "" or value.lower() in ["n/a", "na", "null", "none"]:
-        return "NAN"
-    return value
-
-# --- Parse field:value pairs dynamically ---
-def parse_fields(text):
+def parse_field_value(text):
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
     fields = {}
-    # Match multiple Field:Value or Field - Value in a single line
-    # This captures each pair separately even if multiple appear on the same line
-    pattern = re.findall(r"([A-Za-z0-9 ,()&\-/]+?)\s*[:\-]\s*([^:^\-]+)", text)
-    for field, value in pattern:
-        field_clean = field.strip().title()
-        value_clean = clean_value(value)
-        # Append if duplicate field in same PDF
-        if field_clean not in fields:
-            fields[field_clean] = value_clean
+    current_field = None
+
+    for line in lines:
+        if ":" in line:
+            # Split at first colon only
+            parts = line.split(":", 1)
+            field_name = parts[0].strip()
+            value = parts[1].strip() if len(parts) > 1 else "NAN"
+            fields[field_name] = value if value else "NAN"
+            current_field = field_name
+        elif current_field:
+            # Multi-line value continuation
+            fields[current_field] += " " + line
+
+    # Clean all values
+    for k, v in fields.items():
+        if not v.strip():
+            fields[k] = "NAN"
         else:
-            fields[field_clean] += f" | {value_clean}"
+            fields[k] = " ".join(v.split())  # remove extra spaces/newlines
     return fields
 
-# --- Process uploaded PDFs ---
 for file in uploaded_files:
     file_bytes = file.read()
     text = extract_text(file_bytes)
@@ -82,28 +73,24 @@ for file in uploaded_files:
         st.error(f"❌ Could not extract text from {file.name}")
         continue
 
-    data = {"Filename": file.name}
-    parsed_fields = parse_fields(text)
+    parsed_fields = parse_field_value(text)
+    parsed_fields["Filename"] = file.name
+    rows.append(parsed_fields)
+    all_field_names.update(parsed_fields.keys())
 
-    if not parsed_fields:
-        st.warning(f"No fields found in {file.name}, filling with NAN.")
-        data["NAN"] = "NAN"
-    else:
-        data.update(parsed_fields)
-
-    rows.append(data)
-    dynamic_headers.update(data.keys())
-
-# --- Build DataFrame with dynamic headers ---
-dynamic_headers = ["Filename"] + sorted([h for h in dynamic_headers if h != "Filename"])
+# Build DataFrame with dynamic headers
+dynamic_headers = ["Filename"] + sorted([h for h in all_field_names if h != "Filename"])
 df = pd.DataFrame(rows, columns=dynamic_headers).fillna("NAN")
 
-# --- Preview table ---
+# Preview extracted data
 st.subheader("📊 Extracted Data Preview")
 st.dataframe(df, use_container_width=True)
 
-# --- Download CSV ---
+# CSV download
 csv = df.to_csv(index=False).encode("utf-8")
 st.download_button(
-    "⬇️ Download CSV", data=csv, file_name="extracted_data.csv", mime="text/csv"
+    "⬇️ Download CSV",
+    data=csv,
+    file_name="extracted_data.csv",
+    mime="text/csv"
 )
