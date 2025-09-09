@@ -1,84 +1,88 @@
 import streamlit as st
 import pdfplumber
 from pdf2image import convert_from_bytes
-import pytesseract
 import pandas as pd
+import pytesseract
 from io import BytesIO
-import base64
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
-st.title("📄 Dynamic PDF Field Extractor App")
+st.title("📄 PDF Field Extractor App")
 
-uploaded_file = st.file_uploader("Upload PDF", type="pdf")
-
-def extract_text(file):
-    """Extract text from PDF. If none, use OCR."""
-    text = ""
-    try:
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-        if not text.strip():  # OCR fallback
-            images = convert_from_bytes(file.getvalue())
-            for img in images:
-                text += pytesseract.image_to_string(img)
-    except Exception as e:
-        st.error(f"Error reading PDF: {e}")
-    return text
-
-def parse_dynamic_fields(text):
-    """
-    Parse text dynamically into field-value pairs.
-    Treat lines ending with ':' as new fields. 
-    Multi-line values are appended to last detected field.
-    """
-    data = {}
-    current_field = None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if ":" in line:
-            field, value = line.split(":", 1)
-            field = field.strip()
-            value = value.strip()
-            current_field = field
-            data[current_field] = value
-        elif current_field:
-            if data[current_field]:
-                data[current_field] += "\n" + line
-            else:
-                data[current_field] = line
-    return data
-
-def display_pdf(file):
-    """Preview PDF using iframe."""
-    base64_pdf = base64.b64encode(file.read()).decode('utf-8')
-    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="1000" type="application/pdf"></iframe>'
-    st.markdown(pdf_display, unsafe_allow_html=True)
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file:
     st.subheader("📖 PDF Preview")
-    display_pdf(uploaded_file)
 
-    # Reset file pointer for reading again
-    uploaded_file.seek(0)
-    raw_text = extract_text(uploaded_file)
+    try:
+        # Convert PDF pages to images
+        pages = convert_from_bytes(uploaded_file.read())
+        for i, page in enumerate(pages):
+            st.image(page, caption=f"Page {i+1}", use_column_width=True)
+    except Exception as e:
+        st.error(f"Failed to render PDF: {e}")
 
-    if raw_text.strip():
-        st.subheader("✅ Extracted Table")
-        parsed_data = parse_dynamic_fields(raw_text)
-        df = pd.DataFrame([parsed_data])
-        st.dataframe(df)
+    st.write("---")
+    st.subheader("⚡ Extraction Options")
 
-        csv = df.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            "📥 Download CSV",
-            csv,
-            file_name=uploaded_file.name.replace(".pdf", ".csv"),
-            mime="text/csv"
-        )
-    else:
-        st.warning("⚠️ No text found in this PDF. It might be scanned or image-based.")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Direct PDF Extraction"):
+            uploaded_file.seek(0)  # Reset pointer
+            pdf_text = ""
+            try:
+                with pdfplumber.open(uploaded_file) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            pdf_text += text + "\n"
+            except Exception as e:
+                st.error(f"Error reading PDF: {e}")
+                pdf_text = ""
+
+            if pdf_text.strip():
+                st.success("✅ Text extracted successfully!")
+                st.text_area("Extracted Text", pdf_text, height=300)
+            else:
+                st.warning("⚠️ No text found. It might be scanned. Use table extraction instead.")
+
+    with col2:
+        if st.button("Table Extraction to CSV"):
+            uploaded_file.seek(0)
+            # OCR extraction page by page
+            extracted_data = []
+            for i, page_img in enumerate(convert_from_bytes(uploaded_file.read())):
+                text = pytesseract.image_to_string(page_img)
+                lines = text.splitlines()
+                page_dict = {}
+                current_field = None
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # If line looks like a field, store value
+                    if len(line.split()) <= 5 and not any(c.isdigit() for c in line):
+                        current_field = line
+                        page_dict[current_field] = ""
+                    elif current_field:
+                        page_dict[current_field] += (" " + line if page_dict[current_field] else line)
+
+                if page_dict:
+                    extracted_data.append(page_dict)
+
+            if extracted_data:
+                df = pd.DataFrame(extracted_data)
+                st.success("✅ Table data extracted!")
+                st.dataframe(df)
+
+                csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8")
+                st.download_button(
+                    "📥 Download CSV",
+                    data=csv_bytes,
+                    file_name="extracted_table_data.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("⚠️ No table data could be extracted from this PDF.")
