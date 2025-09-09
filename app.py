@@ -4,6 +4,7 @@ from pdf2image import convert_from_bytes
 import pytesseract
 import pandas as pd
 from io import BytesIO
+import base64
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 Dynamic PDF Field Extractor App")
@@ -46,25 +47,29 @@ def parse_dynamic_fields(text):
             current_field = field
             data[current_field] = value
         elif current_field:
-            # Append line to last detected field
             if data[current_field]:
                 data[current_field] += "\n" + line
             else:
                 data[current_field] = line
     return data
 
-if uploaded_file:
-    # Preview PDF
-    st.subheader("📖 PDF Preview")
-    pdf_bytes = uploaded_file.read()
-    st.pdf(BytesIO(pdf_bytes))
+def display_pdf(file):
+    """Preview PDF using iframe."""
+    base64_pdf = base64.b64encode(file.read()).decode('utf-8')
+    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="1000" type="application/pdf"></iframe>'
+    st.markdown(pdf_display, unsafe_allow_html=True)
 
-    # Extract text and parse dynamically
-    raw_text = extract_text(BytesIO(pdf_bytes))
-    
+if uploaded_file:
+    st.subheader("📖 PDF Preview")
+    display_pdf(uploaded_file)
+
+    # Reset file pointer for reading again
+    uploaded_file.seek(0)
+    raw_text = extract_text(uploaded_file)
+
     if raw_text.strip():
-        parsed_data = parse_dynamic_fields(raw_text)
         st.subheader("✅ Extracted Table")
+        parsed_data = parse_dynamic_fields(raw_text)
         df = pd.DataFrame([parsed_data])
         st.dataframe(df)
 
