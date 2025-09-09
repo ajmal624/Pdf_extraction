@@ -1,64 +1,110 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
+import pytesseract
+from pdf2image import convert_from_bytes
+from PIL import Image
+from io import BytesIO
+import docx
+import fitz  # PyMuPDF for PDF → Word-like conversion
 
-st.set_page_config(page_title="PDF Field Extractor", layout="wide")
-st.title("📄 PDF Field Extractor App (Keep Only PDF Fields)")
 
-uploaded_files = st.file_uploader("Upload PDF files", type=["pdf"], accept_multiple_files=True)
+st.set_page_config(page_title="PDF Extractor Pro", layout="wide")
+st.title("📄 PDF Extractor Pro App")
 
-if uploaded_files:
-    all_data = []
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
-    for uploaded_file in uploaded_files:
-        pdf_text = ""
-        with pdfplumber.open(uploaded_file) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    pdf_text += text + "\n"
+def extract_text_with_ocr(file_bytes):
+    """Try normal extraction, fallback to OCR"""
+    pdf_text = ""
 
-        pdf_data = {}
+    # Try pdfplumber first
+    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                pdf_text += text + "\n"
 
-        for line in pdf_text.splitlines():
-            line = line.strip()
-            if ":" not in line:
-                continue  # skip lines without ":"
+    # Fallback OCR if no text layer
+    if not pdf_text.strip():
+        st.write("🔍 No text layer detected, running OCR...")
+        try:
+            images = convert_from_bytes(file_bytes)
+            for img in images:
+                text = pytesseract.image_to_string(img)
+                pdf_text += text + "\n"
+            if pdf_text.strip():
+                st.success("✅ OCR text extracted successfully!")
+        except Exception as e:
+            st.error(f"❌ OCR failed: {e}")
 
-            # Special case: File ID + Due Date in one line
-            if "Due Date:" in line and "File ID" in line:
-                parts = line.split("Due Date:")
-                pdf_data["File ID"] = parts[0].replace("File ID", "").strip()
-                pdf_data["Due Date"] = parts[1].strip()
-                continue
+    return pdf_text
 
-            # Split only on first colon
-            if ":" in line:
-                field, value = line.split(":", 1)
-                field = field.strip()
-                value = value.strip()
 
-                # ✅ Only keep fields that exist in the PDF (non-empty)
-                if field and value:
-                    pdf_data[field] = value
+def extract_key_values(pdf_text):
+    """Extract only lines with : as key-value"""
+    pdf_data = {}
+    for line in pdf_text.splitlines():
+        line = line.strip()
+        if ":" not in line:
+            continue
+        field, value = line.split(":", 1)
+        pdf_data[field.strip()] = value.strip()
+    return pdf_data
 
-        pdf_data["Filename"] = uploaded_file.name
-        all_data.append(pdf_data)
 
-    # Build dataframe only with detected fields
-    df = pd.DataFrame(all_data)
+def convert_pdf_to_word(file_bytes, output_path="converted.docx"):
+    """Convert PDF → Word using PyMuPDF (basic text flow)"""
+    doc = docx.Document()
+    pdf = fitz.open(stream=file_bytes, filetype="pdf")
+    for page in pdf:
+        text = page.get_text("text")
+        if text.strip():
+            doc.add_paragraph(text)
+    doc.save(output_path)
+    return output_path
 
-    # Drop completely empty columns
-    df = df.dropna(axis=1, how="all")
 
-    st.subheader("✅ Extracted Data")
-    st.dataframe(df)
+def extract_from_word(docx_path):
+    """Extract field:value or tabular from Word"""
+    pdf_data = {}
+    doc = docx.Document(docx_path)
+    for para in doc.paragraphs:
+        line = para.text.strip()
+        if not line:
+            continue
+        if ":" in line:
+            field, value = line.split(":", 1)
+            pdf_data[field.strip()] = value.strip()
+    return pdf_data
 
-    csv = df.to_csv(index=False, encoding="utf-8-sig")
-    st.download_button(
-        label="📥 Download CSV",
-        data=csv,
-        file_name="extracted_data.csv",
-        mime="text/csv"
-    )
 
+if uploaded_file:
+    file_bytes = uploaded_file.read()
+
+    # Button 1 → Direct PDF Extraction
+    if st.button("📑 Extract from PDF (Direct)"):
+        pdf_text = extract_text_with_ocr(file_bytes)
+        if not pdf_text.strip():
+            st.error("❌ No text extracted from PDF.")
+        else:
+            data = extract_key_values(pdf_text)
+            data["Filename"] = uploaded_file.name
+            df = pd.DataFrame([data])
+            st.subheader("✅ Extracted Data (Direct)")
+            st.dataframe(df)
+
+            csv = df.to_csv(index=False, encoding="utf-8-sig")
+            st.download_button("📥 Download CSV", csv, file_name="extracted_direct.csv", mime="text/csv")
+
+    # Button 2 → Convert to Word → Extract
+    if st.button("📝 Convert to Word & Extract"):
+        word_path = convert_pdf_to_word(file_bytes, "temp.docx")
+        data = extract_from_word(word_path)
+        data["Filename"] = uploaded_file.name
+        df = pd.DataFrame([data])
+        st.subheader("✅ Extracted Data (Word-based)")
+        st.dataframe(df)
+
+        csv = df.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button("📥 Download CSV", csv, file_name="extracted_word.csv", mime="text/csv")
