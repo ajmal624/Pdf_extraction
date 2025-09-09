@@ -2,21 +2,28 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import base64
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="📄 PDF Extractor", layout="wide")
 st.title("📄 PDF Extraction App")
 
-# File uploader
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file:
     st.subheader("📂 Uploaded File")
     st.write(f"**Filename:** {uploaded_file.name}")
 
-    # ✅ Preview PDF inside Streamlit
+    # ✅ Preview PDF safely using components
     base64_pdf = base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
-    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600" type="application/pdf"></iframe>'
-    st.markdown(pdf_display, unsafe_allow_html=True)
+    pdf_display = f"""
+    <iframe
+        src="data:application/pdf;base64,{base64_pdf}"
+        width="100%"
+        height="600"
+        style="border:none;"
+    ></iframe>
+    """
+    components.html(pdf_display, height=600, scrolling=True)
 
     # --- Button 1: Extract Key:Value fields ---
     if st.button("🔎 Extract Text Fields"):
@@ -33,7 +40,6 @@ if uploaded_file:
             if not line:
                 continue
 
-            # Handle "File ID ... Due Date ..." special case
             if "Due Date:" in line and "File ID" in line:
                 parts = line.split("Due Date:")
                 pdf_data["File ID"] = parts[0].replace("File ID", "").strip()
@@ -50,7 +56,6 @@ if uploaded_file:
         st.subheader("✅ Extracted Fields")
         st.dataframe(df)
 
-        # Save CSV
         csv = df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="📥 Download Extracted Fields (CSV)",
@@ -75,7 +80,6 @@ if uploaded_file:
             st.subheader("📊 Extracted Tables")
             st.dataframe(df_all)
 
-            # Save CSV
             csv = df_all.to_csv(index=False, encoding="utf-8-sig")
             st.download_button(
                 label="📥 Download Extracted Tables (CSV)",
