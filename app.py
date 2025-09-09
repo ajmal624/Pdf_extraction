@@ -60,25 +60,17 @@ def clean_value(value):
 # --- Parse field:value pairs dynamically ---
 def parse_fields(text):
     fields = {}
-    # Split text into lines
-    lines = text.splitlines()
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Find all Field: Value or Field - Value patterns in line
-        pattern = re.findall(r"([A-Za-z0-9 ,()&\-/]+?)\s*[:\-]\s*([^:^\-]+)", line)
-        for field, value in pattern:
-            field_clean = field.strip().title()
-            value_clean = clean_value(value)
-
-            # Avoid overwriting duplicate fields in same PDF
-            if field_clean not in fields:
-                fields[field_clean] = value_clean
-            else:
-                fields[field_clean] += f" | {value_clean}"
-
+    # Match multiple Field:Value or Field - Value in a single line
+    # This captures each pair separately even if multiple appear on the same line
+    pattern = re.findall(r"([A-Za-z0-9 ,()&\-/]+?)\s*[:\-]\s*([^:^\-]+)", text)
+    for field, value in pattern:
+        field_clean = field.strip().title()
+        value_clean = clean_value(value)
+        # Append if duplicate field in same PDF
+        if field_clean not in fields:
+            fields[field_clean] = value_clean
+        else:
+            fields[field_clean] += f" | {value_clean}"
     return fields
 
 # --- Process uploaded PDFs ---
