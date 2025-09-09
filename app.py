@@ -3,18 +3,15 @@ import pdfplumber
 from pdf2image import convert_from_bytes
 import pytesseract
 import pandas as pd
+from io import BytesIO
 
-st.title("PDF Field-Value Extractor (Multi-line support)")
+st.set_page_config(page_title="PDF Field Extractor", layout="wide")
+st.title("📄 Dynamic PDF Field Extractor App")
 
 uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
-# Define your known fields (can be customized per PDF)
-known_fields = [
-    "Date", "Client Information", "Property Information",
-    "Appraisal Information", "Name on report"
-]
-
 def extract_text(file):
+    """Extract text from PDF. If none, use OCR."""
     text = ""
     try:
         with pdfplumber.open(file) as pdf:
@@ -30,20 +27,26 @@ def extract_text(file):
         st.error(f"Error reading PDF: {e}")
     return text
 
-def parse_fields(text, fields):
+def parse_dynamic_fields(text):
+    """
+    Parse text dynamically into field-value pairs.
+    Treat lines ending with ':' as new fields. 
+    Multi-line values are appended to last detected field.
+    """
     data = {}
     current_field = None
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
-        # Check if line is a known field
-        if any(line.startswith(f) for f in fields):
-            current_field = next(f for f in fields if line.startswith(f))
-            # Initialize value
-            data[current_field] = line[len(current_field):].strip() or ""
+        if ":" in line:
+            field, value = line.split(":", 1)
+            field = field.strip()
+            value = value.strip()
+            current_field = field
+            data[current_field] = value
         elif current_field:
-            # Append line to current field
+            # Append line to last detected field
             if data[current_field]:
                 data[current_field] += "\n" + line
             else:
@@ -51,15 +54,26 @@ def parse_fields(text, fields):
     return data
 
 if uploaded_file:
-    raw_text = extract_text(uploaded_file)
-    st.subheader("📄 Extracted Text")
-    st.text_area("PDF Text", raw_text, height=300)
+    # Preview PDF
+    st.subheader("📖 PDF Preview")
+    pdf_bytes = uploaded_file.read()
+    st.pdf(BytesIO(pdf_bytes))
 
-    parsed_data = parse_fields(raw_text, known_fields)
+    # Extract text and parse dynamically
+    raw_text = extract_text(BytesIO(pdf_bytes))
     
-    st.subheader("✅ Parsed Fields")
-    df = pd.DataFrame([parsed_data])
-    st.dataframe(df)
+    if raw_text.strip():
+        parsed_data = parse_dynamic_fields(raw_text)
+        st.subheader("✅ Extracted Table")
+        df = pd.DataFrame([parsed_data])
+        st.dataframe(df)
 
-    csv = df.to_csv(index=False, encoding="utf-8-sig")
-    st.download_button("📥 Download CSV", csv, file_name=uploaded_file.name.replace(".pdf", ".csv"))
+        csv = df.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            "📥 Download CSV",
+            csv,
+            file_name=uploaded_file.name.replace(".pdf", ".csv"),
+            mime="text/csv"
+        )
+    else:
+        st.warning("⚠️ No text found in this PDF. It might be scanned or image-based.")
