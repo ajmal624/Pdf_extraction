@@ -41,21 +41,23 @@ def extract_text(file_bytes):
 
     return text.strip() if text.strip() else None
 
-# -------- Strict Field:Value Parsing --------
-def parse_field_value_strict(text):
+# -------- Strict Field:Value Parsing (no NAN fill) --------
+def parse_field_value_no_nan(text):
     """
-    Extract field-value pairs strictly from 'Field : Value' lines.
-    Lines without ':' are ignored.
+    Extract Field:Value pairs strictly from PDF text.
+    - Only lines with ':' are considered.
+    - Fields without values are ignored (no NAN).
     """
     fields = {}
     for line in text.splitlines():
         line = line.strip()
         if not line or ":" not in line:
-            continue  # ignore lines without colon
+            continue
         parts = line.split(":", 1)
-        field_name = parts[0].strip()
-        value = parts[1].strip() if len(parts) > 1 else "NAN"
-        fields[field_name] = value if value else "NAN"
+        key = parts[0].strip()
+        value = parts[1].strip()
+        if value:  # only include if value exists
+            fields[key] = value
     return fields
 
 # -------- Process Each File --------
@@ -67,14 +69,14 @@ for file in uploaded_files:
         st.error(f"❌ Could not extract text from {file.name}")
         continue
 
-    parsed_fields = parse_field_value_strict(text)
+    parsed_fields = parse_field_value_no_nan(text)
     parsed_fields["Filename"] = file.name
     rows.append(parsed_fields)
     all_field_names.update(parsed_fields.keys())
 
 # -------- Build DataFrame with Dynamic Headers --------
 dynamic_headers = ["Filename"] + sorted([h for h in all_field_names if h != "Filename"])
-df = pd.DataFrame(rows, columns=dynamic_headers).fillna("NAN")
+df = pd.DataFrame(rows, columns=dynamic_headers)
 
 # -------- Preview Table --------
 st.subheader("📊 Extracted Data Preview")
