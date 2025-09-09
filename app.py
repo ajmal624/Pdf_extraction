@@ -41,22 +41,21 @@ def extract_text(file_bytes):
 
     return text.strip() if text.strip() else None
 
-# -------- Strict Field:Value Parsing (no NAN fill) --------
-def parse_field_value_no_nan(text):
+# -------- Strict Field:Value Parsing --------
+def parse_field_value_strict(text):
     """
     Extract Field:Value pairs strictly from PDF text.
-    - Only lines with ':' are considered.
-    - Fields without values are ignored (no NAN).
+    Only lines containing ':' are considered.
     """
     fields = {}
     for line in text.splitlines():
         line = line.strip()
-        if not line or ":" not in line:
+        if ":" not in line:
             continue
         parts = line.split(":", 1)
         key = parts[0].strip()
         value = parts[1].strip()
-        if value:  # only include if value exists
+        if key and value:
             fields[key] = value
     return fields
 
@@ -69,7 +68,7 @@ for file in uploaded_files:
         st.error(f"❌ Could not extract text from {file.name}")
         continue
 
-    parsed_fields = parse_field_value_no_nan(text)
+    parsed_fields = parse_field_value_strict(text)
     parsed_fields["Filename"] = file.name
     rows.append(parsed_fields)
     all_field_names.update(parsed_fields.keys())
