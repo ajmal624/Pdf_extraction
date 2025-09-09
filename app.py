@@ -6,10 +6,10 @@ import re
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="PDF Field Extractor", layout="wide")
-st.title("📄 PDF Field Extractor → CSV")
+st.set_page_config(page_title="Dynamic PDF Field Extractor", layout="wide")
+st.title("📄 Dynamic PDF Field Extractor → CSV")
 
-# 1. Upload PDFs
+# Upload PDFs
 uploaded_files = st.file_uploader(
     "Upload PDF files", type=["pdf"], accept_multiple_files=True
 )
@@ -19,16 +19,19 @@ if not uploaded_files:
     st.stop()
 
 rows = []
-all_headers = set()
+dynamic_headers = set()
 
 # --- Helper: Extract text from PDF (with OCR fallback) ---
 def extract_text(file_bytes):
     text = ""
-    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
+    try:
+        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+    except:
+        text = ""
     if text.strip():
         return text.strip()
 
@@ -41,43 +44,40 @@ def extract_text(file_bytes):
 # --- Helper: Clean values ---
 def clean_value(value):
     value = value.strip()
-
     # Dates → YYYY-MM-DD
     if re.match(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", value):
         try:
             return pd.to_datetime(value, errors="coerce").strftime("%Y-%m-%d")
         except:
             return value
-
     # Currency → numeric only
     if "$" in value or value.replace(",", "").replace(".", "").isdigit():
         return value.replace("$", "").replace(",", "").strip()
-
     if value == "" or value.lower() in ["n/a", "na", "null", "none"]:
         return "NAN"
-
     return value
 
-# --- Helper: Parse field:value pairs ---
+# --- Parse field:value pairs dynamically ---
 def parse_fields(text):
     fields = {}
-    # Regex finds all FIELD : VALUE pairs in a line
-    pattern = re.compile(r"([A-Za-z0-9 ,()/-]+?)\s*:\s*([^:]+)")
-
-    for line in text.splitlines():
+    # Split text into lines
+    lines = text.splitlines()
+    for line in lines:
         line = line.strip()
         if not line:
             continue
 
-        matches = pattern.findall(line)
-        for field, value in matches:
-            field = field.strip().title()
-            value = clean_value(value)
-            if field not in fields:
-                fields[field] = value
+        # Find all Field: Value or Field - Value patterns in line
+        pattern = re.findall(r"([A-Za-z0-9 ,()&\-/]+?)\s*[:\-]\s*([^:^\-]+)", line)
+        for field, value in pattern:
+            field_clean = field.strip().title()
+            value_clean = clean_value(value)
+
+            # Avoid overwriting duplicate fields in same PDF
+            if field_clean not in fields:
+                fields[field_clean] = value_clean
             else:
-                # Append if duplicate field in same PDF
-                fields[field] += f" | {value}"
+                fields[field_clean] += f" | {value_clean}"
 
     return fields
 
@@ -100,11 +100,11 @@ for file in uploaded_files:
         data.update(parsed_fields)
 
     rows.append(data)
-    all_headers.update(data.keys())
+    dynamic_headers.update(data.keys())
 
 # --- Build DataFrame with dynamic headers ---
-all_headers = ["Filename"] + sorted([h for h in all_headers if h != "Filename"])
-df = pd.DataFrame(rows, columns=all_headers).fillna("NAN")
+dynamic_headers = ["Filename"] + sorted([h for h in dynamic_headers if h != "Filename"])
+df = pd.DataFrame(rows, columns=dynamic_headers).fillna("NAN")
 
 # --- Preview table ---
 st.subheader("📊 Extracted Data Preview")
