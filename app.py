@@ -23,28 +23,33 @@ if uploaded_files:
 
         for line in pdf_text.splitlines():
             line = line.strip()
-            if not line or ":" not in line:
+            if ":" not in line:
                 continue  # skip lines without ":"
 
-            # Split only at the first ":"
-            parts = line.split(":", 1)
-            field = parts[0].strip()
-            value = parts[1].strip() if len(parts) > 1 else ""
+            # Check for special case: "File ID ... Due Date:..."
+            if re.search(r"Due Date\s*:", line, re.IGNORECASE) and "File ID" in line:
+                # Extract File ID and Due Date separately
+                file_match = re.match(r"(.*)Due Date\s*:\s*(.*)", line, re.IGNORECASE)
+                if file_match:
+                    file_part = file_match.group(1).strip()
+                    due_part = file_match.group(2).strip()
+                    pdf_data["File ID"] = file_part.replace("File ID", "").strip()
+                    pdf_data["Due Date"] = due_part
+                    continue
 
-            pdf_data[field] = value
+            # Normal field:value split
+            field, value = line.split(":", 1)
+            pdf_data[field.strip()] = value.strip()
 
-        # Add filename
         pdf_data["Filename"] = uploaded_file.name
         all_data.append(pdf_data)
 
-    # Create DataFrame dynamically with all unique fields
     df = pd.DataFrame(all_data)
-    df = df.fillna("")  # optional, replace missing fields with empty string
+    df = df.loc[:, df.any()]  # Remove empty columns automatically
 
     st.subheader("Preview Extracted Data")
     st.dataframe(df)
 
-    # Download CSV
     csv = df.to_csv(index=False, encoding="utf-8-sig")
     st.download_button(
         label="📥 Download CSV",
