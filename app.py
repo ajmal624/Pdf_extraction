@@ -4,6 +4,7 @@ import pytesseract
 from pdf2image import convert_from_bytes
 import pandas as pd
 from io import BytesIO
+import re
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field:Value Extractor → CSV")
@@ -17,7 +18,8 @@ if not uploaded_files:
     st.stop()
 
 rows = []
-all_field_names = set()
+all_fields = set()
+
 
 # -------- Text Extraction Function --------
 def extract_text(file_bytes):
@@ -34,32 +36,47 @@ def extract_text(file_bytes):
     if text.strip():
         return text.strip()
 
-    # OCR fallback for scanned PDFs
+    # OCR fallback
     images = convert_from_bytes(file_bytes)
     for img in images:
         text += pytesseract.image_to_string(img) + "\n"
 
     return text.strip() if text.strip() else None
 
-# -------- Strict Field:Value Parsing --------
-def parse_field_value_strict(text):
+
+# -------- Enhanced Field:Value Parser --------
+def parse_field_value_enhanced(text):
     """
-    Extract Field:Value pairs strictly from PDF text.
-    Only lines containing ':' are considered.
+    Parses PDF text to extract Field:Value pairs.
+    Supports:
+        - Lines with ':', '-', or multiple spaces
+        - Multi-line values
     """
     fields = {}
+    last_field = None
+
     for line in text.splitlines():
         line = line.strip()
-        if ":" not in line:
+        if not line:
             continue
-        parts = line.split(":", 1)
-        key = parts[0].strip()
-        value = parts[1].strip()
-        if key and value:
-            fields[key] = value
+
+        # Match line with Field:Value or Field - Value or Field  Value
+        match = re.match(r"^(.*?)(?:\:|\-|\s{2,})(.*)$", line)
+        if match:
+            key = match.group(1).strip()
+            value = match.group(2).strip()
+            if key and value:
+                fields[key] = value
+                last_field = key
+        else:
+            # Append line to previous field (multi-line value)
+            if last_field:
+                fields[last_field] += " " + line
+
     return fields
 
-# -------- Process Each File --------
+
+# -------- Process Each Uploaded File --------
 for file in uploaded_files:
     file_bytes = file.read()
     text = extract_text(file_bytes)
@@ -68,13 +85,13 @@ for file in uploaded_files:
         st.error(f"❌ Could not extract text from {file.name}")
         continue
 
-    parsed_fields = parse_field_value_strict(text)
+    parsed_fields = parse_field_value_enhanced(text)
     parsed_fields["Filename"] = file.name
     rows.append(parsed_fields)
-    all_field_names.update(parsed_fields.keys())
+    all_fields.update(parsed_fields.keys())
 
 # -------- Build DataFrame with Dynamic Headers --------
-dynamic_headers = ["Filename"] + sorted([h for h in all_field_names if h != "Filename"])
+dynamic_headers = ["Filename"] + sorted([f for f in all_fields if f != "Filename"])
 df = pd.DataFrame(rows, columns=dynamic_headers)
 
 # -------- Preview Table --------
