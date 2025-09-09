@@ -3,6 +3,7 @@ import pdfplumber
 import pandas as pd
 from pdf2image import convert_from_bytes
 import pytesseract
+import base64
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App (Text + OCR)")
@@ -13,7 +14,6 @@ def extract_text(file):
     """Extract text from PDF (text-based or OCR if image-based)."""
     text = ""
     try:
-        # Try text-based extraction first
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
                 page_text = page.extract_text()
@@ -22,7 +22,6 @@ def extract_text(file):
     except:
         pass
 
-    # If no text found, use OCR
     if not text.strip():
         st.info("🔍 No text layer detected, running OCR...")
         try:
@@ -35,39 +34,32 @@ def extract_text(file):
     return text
 
 def parse_lines_to_dict(text):
-    """
-    Convert lines into dictionary.
-    Each line is treated as a separate field with its value.
-    Field = first word(s), Value = rest (heuristic, depends on PDF format).
-    """
+    """Convert lines into dictionary: first word(s) as field, rest as value."""
     data = {}
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
-        # Simple heuristic: first word as key, rest as value
         parts = line.split(maxsplit=1)
         if len(parts) == 2:
             field, value = parts
             data[field] = value.strip()
         else:
-            # If only one word, use as field with empty value
             data[parts[0]] = ""
     return data
 
-if uploaded_files:
-    st.subheader("📄 Uploaded PDF Preview")
-    for uploaded_file in uploaded_files:
-        st.write(f"**File:** {uploaded_file.name}")
-        # Preview PDF (not download)
-        st.download_button(
-            label="📥 Download Original PDF",
-            data=uploaded_file.getvalue(),
-            file_name=uploaded_file.name,
-            mime="application/pdf"
-        )
+def display_pdf(file):
+    """Preview PDF in Streamlit using iframe."""
+    base64_pdf = base64.b64encode(file.getvalue()).decode('utf-8')
+    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="900" type="application/pdf"></iframe>'
+    st.markdown(pdf_display, unsafe_allow_html=True)
 
-    # Buttons for two options
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        st.subheader(f"📄 Preview: {uploaded_file.name}")
+        display_pdf(uploaded_file)
+
+    # Extraction options
     option = st.radio("Select extraction mode:", ["Extract PDF as-is", "Extract Table Data (all lines)"])
 
     if st.button("Run Extraction"):
