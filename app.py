@@ -1,7 +1,6 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
-import re
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App (Dynamic Fields)")
@@ -26,26 +25,30 @@ if uploaded_files:
             if ":" not in line:
                 continue  # skip lines without ":"
 
-            # Check for special case: "File ID ... Due Date:..."
-            if re.search(r"Due Date\s*:", line, re.IGNORECASE) and "File ID" in line:
-                # Extract File ID and Due Date separately
-                file_match = re.match(r"(.*)Due Date\s*:\s*(.*)", line, re.IGNORECASE)
-                if file_match:
-                    file_part = file_match.group(1).strip()
-                    due_part = file_match.group(2).strip()
-                    pdf_data["File ID"] = file_part.replace("File ID", "").strip()
-                    pdf_data["Due Date"] = due_part
-                    continue
+            # Handle combined "File ID ... Due Date: ..."
+            if "Due Date:" in line and "File ID" in line:
+                parts = line.split("Due Date:")
+                pdf_data["File ID"] = parts[0].replace("File ID", "").strip()
+                pdf_data["Due Date"] = parts[1].strip()
+                continue
 
-            # Normal field:value split
-            field, value = line.split(":", 1)
-            pdf_data[field.strip()] = value.strip()
+            # Only split on the first ":" to avoid extra columns
+            if ":" in line:
+                field, value = line.split(":", 1)
+                field = field.strip()
+                value = value.strip()
+                # Make sure field is not empty
+                if field:
+                    pdf_data[field] = value
 
         pdf_data["Filename"] = uploaded_file.name
         all_data.append(pdf_data)
 
+    # Create DataFrame
     df = pd.DataFrame(all_data)
-    df = df.loc[:, df.any()]  # Remove empty columns automatically
+
+    # Optional: remove empty columns (all NaN)
+    df = df.dropna(axis=1, how='all')
 
     st.subheader("Preview Extracted Data")
     st.dataframe(df)
