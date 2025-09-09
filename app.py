@@ -1,110 +1,89 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
-import pytesseract
-from pdf2image import convert_from_bytes
-from PIL import Image
-from io import BytesIO
-import docx
-import fitz  # PyMuPDF for PDF → Word-like conversion
 
+st.set_page_config(page_title="📄 PDF Extractor", layout="wide")
+st.title("📄 PDF Extraction App")
 
-st.set_page_config(page_title="PDF Extractor Pro", layout="wide")
-st.title("📄 PDF Extractor Pro App")
-
+# File uploader
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
-def extract_text_with_ocr(file_bytes):
-    """Try normal extraction, fallback to OCR"""
-    pdf_text = ""
-
-    # Try pdfplumber first
-    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                pdf_text += text + "\n"
-
-    # Fallback OCR if no text layer
-    if not pdf_text.strip():
-        st.write("🔍 No text layer detected, running OCR...")
-        try:
-            images = convert_from_bytes(file_bytes)
-            for img in images:
-                text = pytesseract.image_to_string(img)
-                pdf_text += text + "\n"
-            if pdf_text.strip():
-                st.success("✅ OCR text extracted successfully!")
-        except Exception as e:
-            st.error(f"❌ OCR failed: {e}")
-
-    return pdf_text
-
-
-def extract_key_values(pdf_text):
-    """Extract only lines with : as key-value"""
-    pdf_data = {}
-    for line in pdf_text.splitlines():
-        line = line.strip()
-        if ":" not in line:
-            continue
-        field, value = line.split(":", 1)
-        pdf_data[field.strip()] = value.strip()
-    return pdf_data
-
-
-def convert_pdf_to_word(file_bytes, output_path="converted.docx"):
-    """Convert PDF → Word using PyMuPDF (basic text flow)"""
-    doc = docx.Document()
-    pdf = fitz.open(stream=file_bytes, filetype="pdf")
-    for page in pdf:
-        text = page.get_text("text")
-        if text.strip():
-            doc.add_paragraph(text)
-    doc.save(output_path)
-    return output_path
-
-
-def extract_from_word(docx_path):
-    """Extract field:value or tabular from Word"""
-    pdf_data = {}
-    doc = docx.Document(docx_path)
-    for para in doc.paragraphs:
-        line = para.text.strip()
-        if not line:
-            continue
-        if ":" in line:
-            field, value = line.split(":", 1)
-            pdf_data[field.strip()] = value.strip()
-    return pdf_data
-
-
 if uploaded_file:
-    file_bytes = uploaded_file.read()
+    st.subheader("📂 Uploaded File")
+    st.write(f"**Filename:** {uploaded_file.name}")
 
-    # Button 1 → Direct PDF Extraction
-    if st.button("📑 Extract from PDF (Direct)"):
-        pdf_text = extract_text_with_ocr(file_bytes)
-        if not pdf_text.strip():
-            st.error("❌ No text extracted from PDF.")
-        else:
-            data = extract_key_values(pdf_text)
-            data["Filename"] = uploaded_file.name
-            df = pd.DataFrame([data])
-            st.subheader("✅ Extracted Data (Direct)")
-            st.dataframe(df)
+    # Optionally preview PDF first page
+    st.download_button(
+        label="📥 Download Original PDF",
+        data=uploaded_file.getbuffer(),
+        file_name=uploaded_file.name,
+        mime="application/pdf"
+    )
 
-            csv = df.to_csv(index=False, encoding="utf-8-sig")
-            st.download_button("📥 Download CSV", csv, file_name="extracted_direct.csv", mime="text/csv")
+    # --- Button 1: Extract Key:Value fields ---
+    if st.button("🔎 Extract Text Fields"):
+        pdf_text = ""
+        with pdfplumber.open(uploaded_file) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    pdf_text += text + "\n"
 
-    # Button 2 → Convert to Word → Extract
-    if st.button("📝 Convert to Word & Extract"):
-        word_path = convert_pdf_to_word(file_bytes, "temp.docx")
-        data = extract_from_word(word_path)
-        data["Filename"] = uploaded_file.name
-        df = pd.DataFrame([data])
-        st.subheader("✅ Extracted Data (Word-based)")
+        pdf_data = {}
+        for line in pdf_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            # Handle "File ID ... Due Date ..." special case
+            if "Due Date:" in line and "File ID" in line:
+                parts = line.split("Due Date:")
+                pdf_data["File ID"] = parts[0].replace("File ID", "").strip()
+                pdf_data["Due Date"] = parts[1].strip()
+                continue
+
+            if ":" in line:
+                field, value = line.split(":", 1)
+                pdf_data[field.strip()] = value.strip()
+
+        pdf_data["Filename"] = uploaded_file.name
+
+        df = pd.DataFrame([pdf_data])
+        st.subheader("✅ Extracted Fields")
         st.dataframe(df)
 
+        # Download extracted fields
         csv = df.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button("📥 Download CSV", csv, file_name="extracted_word.csv", mime="text/csv")
+        st.download_button(
+            label="📥 Download Extracted Fields (CSV)",
+            data=csv,
+            file_name="extracted_fields.csv",
+            mime="text/csv"
+        )
+
+    # --- Button 2: Extract Tables ---
+    if st.button("📊 Extract Tables"):
+        all_tables = []
+        with pdfplumber.open(uploaded_file) as pdf:
+            for i, page in enumerate(pdf.pages, start=1):
+                tables = page.extract_tables()
+                for table in tables:
+                    df_table = pd.DataFrame(table)
+                    df_table["Page"] = i
+                    all_tables.append(df_table)
+
+        if all_tables:
+            df_all = pd.concat(all_tables, ignore_index=True)
+            st.subheader("📊 Extracted Tables")
+            st.dataframe(df_all)
+
+            # Download tables
+            csv = df_all.to_csv(index=False, encoding="utf-8-sig")
+            st.download_button(
+                label="📥 Download Extracted Tables (CSV)",
+                data=csv,
+                file_name="extracted_tables.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("⚠️ No tables detected in this PDF.")
