@@ -1,6 +1,7 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
+import base64
 
 st.set_page_config(page_title="📄 PDF Extractor", layout="wide")
 st.title("📄 PDF Extraction App")
@@ -12,16 +13,10 @@ if uploaded_file:
     st.subheader("📂 Uploaded File")
     st.write(f"**Filename:** {uploaded_file.name}")
 
-    # ✅ Fix: convert buffer to bytes for Streamlit Cloud
-    pdf_bytes = uploaded_file.read()
-
-    # Show download button for the original file
-    st.download_button(
-        label="📥 Download Original PDF",
-        data=pdf_bytes,
-        file_name=uploaded_file.name,
-        mime="application/pdf"
-    )
+    # ✅ Preview PDF inside Streamlit
+    base64_pdf = base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
+    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600" type="application/pdf"></iframe>'
+    st.markdown(pdf_display, unsafe_allow_html=True)
 
     # --- Button 1: Extract Key:Value fields ---
     if st.button("🔎 Extract Text Fields"):
@@ -55,7 +50,7 @@ if uploaded_file:
         st.subheader("✅ Extracted Fields")
         st.dataframe(df)
 
-        # Download extracted fields
+        # Save CSV
         csv = df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="📥 Download Extracted Fields (CSV)",
@@ -80,7 +75,7 @@ if uploaded_file:
             st.subheader("📊 Extracted Tables")
             st.dataframe(df_all)
 
-            # Download tables
+            # Save CSV
             csv = df_all.to_csv(index=False, encoding="utf-8-sig")
             st.download_button(
                 label="📥 Download Extracted Tables (CSV)",
