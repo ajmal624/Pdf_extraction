@@ -1,91 +1,99 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
-import base64
-import streamlit.components.v1 as components
+from pdf2image import convert_from_bytes
 
-st.set_page_config(page_title="📄 PDF Extractor", layout="wide")
-st.title("📄 PDF Extraction App")
+st.set_page_config(page_title="PDF Field Extractor", layout="wide")
+st.title("📄 PDF Field Extractor App")
 
+# --- Upload PDF ---
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file:
-    st.subheader("📂 Uploaded File")
-    st.write(f"**Filename:** {uploaded_file.name}")
+    st.subheader("📂 PDF Preview")
+    # Preview PDF as images
+    try:
+        images = convert_from_bytes(uploaded_file.getvalue())
+        for i, img in enumerate(images):
+            st.image(img, caption=f"Page {i+1}", use_column_width=True)
+    except Exception as e:
+        st.error(f"❌ Unable to render PDF preview: {e}")
 
-    # ✅ Preview PDF safely using components
-    base64_pdf = base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
-    pdf_display = f"""
-    <iframe
-        src="data:application/pdf;base64,{base64_pdf}"
-        width="100%"
-        height="600"
-        style="border:none;"
-    ></iframe>
-    """
-    components.html(pdf_display, height=600, scrolling=True)
+    # --- Buttons ---
+    col1, col2 = st.columns(2)
 
-    # --- Button 1: Extract Key:Value fields ---
-    if st.button("🔎 Extract Text Fields"):
-        pdf_text = ""
-        with pdfplumber.open(uploaded_file) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    pdf_text += text + "\n"
+    # ----------- Button 1: Extract Fields -----------
+    with col1:
+        if st.button("📝 Extract Fields"):
+            pdf_text = ""
+            try:
+                with pdfplumber.open(uploaded_file) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            pdf_text += text + "\n"
+            except Exception as e:
+                st.error(f"❌ Failed to read PDF text: {e}")
+                pdf_text = ""
 
-        pdf_data = {}
-        for line in pdf_text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
+            if pdf_text.strip() == "":
+                st.warning("⚠️ No text found in this PDF. It might be scanned or image-based.")
+            else:
+                pdf_data = {}
+                for line in pdf_text.splitlines():
+                    line = line.strip()
+                    if ":" not in line:
+                        continue  # skip lines without ":"
+                    field, value = line.split(":", 1)
+                    field = field.strip()
+                    value = value.strip()
+                    if field and value:
+                        pdf_data[field] = value
+                pdf_data["Filename"] = uploaded_file.name
 
-            if "Due Date:" in line and "File ID" in line:
-                parts = line.split("Due Date:")
-                pdf_data["File ID"] = parts[0].replace("File ID", "").strip()
-                pdf_data["Due Date"] = parts[1].strip()
-                continue
+                df = pd.DataFrame([pdf_data])
+                st.subheader("✅ Extracted Fields")
+                st.dataframe(df)
 
-            if ":" in line:
-                field, value = line.split(":", 1)
-                pdf_data[field.strip()] = value.strip()
+    # ----------- Button 2: Extract Table Data -----------
+    with col2:
+        if st.button("📊 Extract Table to CSV"):
+            pdf_text = ""
+            try:
+                with pdfplumber.open(uploaded_file) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            pdf_text += text + "\n"
+            except Exception as e:
+                st.error(f"❌ Failed to read PDF text: {e}")
+                pdf_text = ""
 
-        pdf_data["Filename"] = uploaded_file.name
+            if pdf_text.strip() == "":
+                st.warning("⚠️ No text found in this PDF. It might be scanned or image-based.")
+            else:
+                all_data = []
+                pdf_data = {}
+                for line in pdf_text.splitlines():
+                    line = line.strip()
+                    if ":" not in line:
+                        continue
+                    field, value = line.split(":", 1)
+                    field = field.strip()
+                    value = value.strip()
+                    if field:
+                        pdf_data[field] = value
+                pdf_data["Filename"] = uploaded_file.name
+                all_data.append(pdf_data)
 
-        df = pd.DataFrame([pdf_data])
-        st.subheader("✅ Extracted Fields")
-        st.dataframe(df)
+                df_table = pd.DataFrame(all_data)
+                st.subheader("✅ Table Extracted")
+                st.dataframe(df_table)
 
-        csv = df.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            label="📥 Download Extracted Fields (CSV)",
-            data=csv,
-            file_name="extracted_fields.csv",
-            mime="text/csv"
-        )
-
-    # --- Button 2: Extract Tables ---
-    if st.button("📊 Extract Tables"):
-        all_tables = []
-        with pdfplumber.open(uploaded_file) as pdf:
-            for i, page in enumerate(pdf.pages, start=1):
-                tables = page.extract_tables()
-                for table in tables:
-                    df_table = pd.DataFrame(table)
-                    df_table["Page"] = i
-                    all_tables.append(df_table)
-
-        if all_tables:
-            df_all = pd.concat(all_tables, ignore_index=True)
-            st.subheader("📊 Extracted Tables")
-            st.dataframe(df_all)
-
-            csv = df_all.to_csv(index=False, encoding="utf-8-sig")
-            st.download_button(
-                label="📥 Download Extracted Tables (CSV)",
-                data=csv,
-                file_name="extracted_tables.csv",
-                mime="text/csv"
-            )
-        else:
-            st.warning("⚠️ No tables detected in this PDF.")
+                csv = df_table.to_csv(index=False, encoding="utf-8-sig")
+                st.download_button(
+                    label="📥 Download CSV",
+                    data=csv,
+                    file_name="extracted_table.csv",
+                    mime="text/csv"
+                )
