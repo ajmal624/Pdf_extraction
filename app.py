@@ -1,108 +1,51 @@
 import streamlit as st
 import pdfplumber
-import pytesseract
-from pdf2image import convert_from_bytes
 import pandas as pd
-from io import BytesIO
-import re
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
-st.title("📄 PDF Field:Value Extractor → CSV")
+st.title("📄 PDF Field Extractor App")
 
-uploaded_files = st.file_uploader(
-    "Upload PDF files", type=["pdf"], accept_multiple_files=True
-)
+uploaded_files = st.file_uploader("Upload PDF files", type=["pdf"], accept_multiple_files=True)
 
-if not uploaded_files:
-    st.warning("Please upload at least one PDF file.")
-    st.stop()
+if uploaded_files:
+    all_data = []
 
-rows = []
-all_fields = set()
-
-
-# -------- Text Extraction Function --------
-def extract_text(file_bytes):
-    text = ""
-    try:
-        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+    for uploaded_file in uploaded_files:
+        pdf_text = ""
+        # Read PDF
+        with pdfplumber.open(uploaded_file) as pdf:
             for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-    except:
-        text = ""
+                text = page.extract_text()
+                if text:
+                    pdf_text += text + "\n"
 
-    if text.strip():
-        return text.strip()
+        # Parse field:value pairs using only ':'
+        pdf_data = {}
+        for line in pdf_text.splitlines():
+            line = line.strip()
+            if not line or ':' not in line:
+                continue  # skip lines without ':'
 
-    # OCR fallback
-    images = convert_from_bytes(file_bytes)
-    for img in images:
-        text += pytesseract.image_to_string(img) + "\n"
+            parts = line.split(':', 1)
+            field = parts[0].strip()
+            value = parts[1].strip()
+            pdf_data[field] = value if value else ""
 
-    return text.strip() if text.strip() else None
+        # Add filename to the data
+        pdf_data["Filename"] = uploaded_file.name
+        all_data.append(pdf_data)
 
+    # Create DataFrame
+    df = pd.DataFrame(all_data)
+    
+    st.subheader("Preview Extracted Data")
+    st.dataframe(df.fillna(""))
 
-# -------- Enhanced Field:Value Parser --------
-def parse_field_value_enhanced(text):
-    """
-    Parses PDF text to extract Field:Value pairs.
-    Supports:
-        - Lines with ':', '-', or multiple spaces
-        - Multi-line values
-    """
-    fields = {}
-    last_field = None
-
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-
-        # Match line with Field:Value or Field - Value or Field  Value
-        match = re.match(r"^(.*?)(?:\:|\-|\s{2,})(.*)$", line)
-        if match:
-            key = match.group(1).strip()
-            value = match.group(2).strip()
-            if key and value:
-                fields[key] = value
-                last_field = key
-        else:
-            # Append line to previous field (multi-line value)
-            if last_field:
-                fields[last_field] += " " + line
-
-    return fields
-
-
-# -------- Process Each Uploaded File --------
-for file in uploaded_files:
-    file_bytes = file.read()
-    text = extract_text(file_bytes)
-
-    if not text:
-        st.error(f"❌ Could not extract text from {file.name}")
-        continue
-
-    parsed_fields = parse_field_value_enhanced(text)
-    parsed_fields["Filename"] = file.name
-    rows.append(parsed_fields)
-    all_fields.update(parsed_fields.keys())
-
-# -------- Build DataFrame with Dynamic Headers --------
-dynamic_headers = ["Filename"] + sorted([f for f in all_fields if f != "Filename"])
-df = pd.DataFrame(rows, columns=dynamic_headers)
-
-# -------- Preview Table --------
-st.subheader("📊 Extracted Data Preview")
-st.dataframe(df, use_container_width=True)
-
-# -------- CSV Download --------
-csv = df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "⬇️ Download CSV",
-    data=csv,
-    file_name="extracted_data.csv",
-    mime="text/csv"
-)
+    # Download button
+    csv = df.to_csv(index=False, encoding="utf-8-sig")
+    st.download_button(
+        label="📥 Download Extracted CSV",
+        data=csv,
+        file_name="extracted_data.csv",
+        mime="text/csv"
+    )
