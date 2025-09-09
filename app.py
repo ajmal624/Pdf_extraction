@@ -9,7 +9,7 @@ from io import BytesIO
 st.set_page_config(page_title="Dynamic PDF Field Extractor", layout="wide")
 st.title("📄 Dynamic PDF Field Extractor → CSV")
 
-# Upload PDFs
+# --- Upload PDFs ---
 uploaded_files = st.file_uploader(
     "Upload PDF files", type=["pdf"], accept_multiple_files=True
 )
@@ -21,7 +21,7 @@ if not uploaded_files:
 rows = []
 dynamic_headers = set()
 
-# --- Helper: Extract text from PDF (with OCR fallback) ---
+# --- Extract text from PDF (with OCR fallback) ---
 def extract_text(file_bytes):
     text = ""
     try:
@@ -41,7 +41,7 @@ def extract_text(file_bytes):
         text += pytesseract.image_to_string(img) + "\n"
     return text.strip() if text.strip() else None
 
-# --- Helper: Clean values ---
+# --- Clean extracted values ---
 def clean_value(value):
     value = value.strip()
     # Dates → YYYY-MM-DD
@@ -57,23 +57,36 @@ def clean_value(value):
         return "NAN"
     return value
 
-# --- Parse field:value pairs dynamically ---
+# --- Parse dynamic fields including multi-line values ---
 def parse_fields(text):
     fields = {}
-    # Match multiple Field:Value or Field - Value in a single line
-    # This captures each pair separately even if multiple appear on the same line
-    pattern = re.findall(r"([A-Za-z0-9 ,()&\-/]+?)\s*[:\-]\s*([^:^\-]+)", text)
-    for field, value in pattern:
-        field_clean = field.strip().title()
-        value_clean = clean_value(value)
-        # Append if duplicate field in same PDF
-        if field_clean not in fields:
-            fields[field_clean] = value_clean
+    current_field = None
+    lines = text.splitlines()
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Find all Field:Value or Field - Value pairs
+        matches = re.findall(r"([A-Za-z0-9 ,()&\-/]+?)\s*[:\-]\s*([^:^\-]+)", line)
+        if matches:
+            for field, value in matches:
+                field_clean = field.strip().title()
+                value_clean = clean_value(value)
+                if field_clean not in fields:
+                    fields[field_clean] = value_clean
+                else:
+                    fields[field_clean] += f" | {value_clean}"
+                current_field = field_clean
         else:
-            fields[field_clean] += f" | {value_clean}"
+            # Line without a colon → append to previous field
+            if current_field:
+                fields[current_field] += " " + line.strip()
+
     return fields
 
-# --- Process uploaded PDFs ---
+# --- Process each uploaded PDF ---
 for file in uploaded_files:
     file_bytes = file.read()
     text = extract_text(file_bytes)
@@ -105,5 +118,8 @@ st.dataframe(df, use_container_width=True)
 # --- Download CSV ---
 csv = df.to_csv(index=False).encode("utf-8")
 st.download_button(
-    "⬇️ Download CSV", data=csv, file_name="extracted_data.csv", mime="text/csv"
+    "⬇️ Download CSV",
+    data=csv,
+    file_name="extracted_data.csv",
+    mime="text/csv"
 )
