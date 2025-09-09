@@ -12,10 +12,13 @@ if uploaded_file:
     st.subheader("📂 Uploaded File")
     st.write(f"**Filename:** {uploaded_file.name}")
 
-    # Optionally preview PDF first page
+    # ✅ Fix: convert buffer to bytes for Streamlit Cloud
+    pdf_bytes = uploaded_file.read()
+
+    # Show download button for the original file
     st.download_button(
         label="📥 Download Original PDF",
-        data=uploaded_file.getbuffer(),
+        data=pdf_bytes,
         file_name=uploaded_file.name,
         mime="application/pdf"
     )
