@@ -2,14 +2,13 @@ import streamlit as st
 import pdfplumber
 import pytesseract
 from pdf2image import convert_from_bytes
-import re
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="Dynamic PDF Field Extractor", layout="wide")
-st.title("📄 Dynamic PDF Field Extractor → CSV")
+st.set_page_config(page_title="Robust PDF Field Extractor", layout="wide")
+st.title("📄 Robust PDF Field Extractor → CSV")
 
-# --- Upload PDFs ---
+# Upload PDFs
 uploaded_files = st.file_uploader(
     "Upload PDF files", type=["pdf"], accept_multiple_files=True
 )
@@ -32,6 +31,7 @@ def extract_text(file_bytes):
                     text += page_text + "\n"
     except:
         text = ""
+
     if text.strip():
         return text.strip()
 
@@ -43,50 +43,54 @@ def extract_text(file_bytes):
 
 # --- Clean extracted values ---
 def clean_value(value):
-    value = value.strip()
-    # Dates → YYYY-MM-DD
-    if re.match(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", value):
-        try:
-            return pd.to_datetime(value, errors="coerce").strftime("%Y-%m-%d")
-        except:
-            return value
-    # Currency → numeric only
-    if "$" in value or value.replace(",", "").replace(".", "").isdigit():
-        return value.replace("$", "").replace(",", "").strip()
+    value = value.strip().replace("\n", " ")
     if value == "" or value.lower() in ["n/a", "na", "null", "none"]:
         return "NAN"
-    return value
+    # Remove extra spaces
+    return " ".join(value.split())
 
-# --- Parse dynamic fields including multi-line values ---
-def parse_fields(text):
+# --- Robust field parser ---
+def parse_fields_robust(text, known_fields=None):
+    """
+    text: raw PDF text
+    known_fields: optional list of field names
+    """
     fields = {}
     current_field = None
-    lines = text.splitlines()
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
 
     for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+        matched_field = None
+        # Check against known fields first
+        if known_fields:
+            for field in known_fields:
+                if line.lower().startswith(field.lower()):
+                    matched_field = field
+                    break
 
-        # Find all Field:Value or Field - Value pairs
-        matches = re.findall(r"([A-Za-z0-9 ,()&\-/]+?)\s*[:\-]\s*([^:^\-]+)", line)
-        if matches:
-            for field, value in matches:
-                field_clean = field.strip().title()
-                value_clean = clean_value(value)
-                if field_clean not in fields:
-                    fields[field_clean] = value_clean
-                else:
-                    fields[field_clean] += f" | {value_clean}"
-                current_field = field_clean
+        # Field: Value pattern
+        if ":" in line:
+            parts = line.split(":", 1)
+            matched_field = parts[0].strip()
+            value = parts[1].strip()
+            if matched_field not in fields:
+                fields[matched_field] = clean_value(value)
+            else:
+                fields[matched_field] += " | " + clean_value(value)
+            current_field = matched_field
+        elif matched_field:
+            current_field = matched_field
+            fields[current_field] = clean_value(line[len(matched_field):].strip())
+        elif current_field:
+            # Append multi-line value
+            fields[current_field] += " " + clean_value(line)
         else:
-            # Line without a colon → append to previous field
-            if current_field:
-                fields[current_field] += " " + line.strip()
+            continue
 
     return fields
 
-# --- Process each uploaded PDF ---
+# --- Process uploaded PDFs ---
+all_field_names = set()
 for file in uploaded_files:
     file_bytes = file.read()
     text = extract_text(file_bytes)
@@ -95,20 +99,16 @@ for file in uploaded_files:
         st.error(f"❌ Could not extract text from {file.name}")
         continue
 
-    data = {"Filename": file.name}
-    parsed_fields = parse_fields(text)
+    # Use previous field names to improve parsing
+    parsed_fields = parse_fields_robust(text, known_fields=list(all_field_names) if all_field_names else None)
+    all_field_names.update(parsed_fields.keys())
 
-    if not parsed_fields:
-        st.warning(f"No fields found in {file.name}, filling with NAN.")
-        data["NAN"] = "NAN"
-    else:
-        data.update(parsed_fields)
-
-    rows.append(data)
-    dynamic_headers.update(data.keys())
+    # Always include filename
+    parsed_fields["Filename"] = file.name
+    rows.append(parsed_fields)
 
 # --- Build DataFrame with dynamic headers ---
-dynamic_headers = ["Filename"] + sorted([h for h in dynamic_headers if h != "Filename"])
+dynamic_headers = ["Filename"] + sorted([h for h in all_field_names if h != "Filename"])
 df = pd.DataFrame(rows, columns=dynamic_headers).fillna("NAN")
 
 # --- Preview table ---
