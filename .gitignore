@@ -1,31 +1,18 @@
-
----
-
-## 📄 `.gitignore`
-
-```gitignore
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
-.venv
-env/
-venv/
-ENV/
-*.sqlite3
-*.db
 
-# Streamlit
-.streamlit/
+# PDF uploads
+*.pdf
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Streamlit cache
+.streamlit/
 
-# Jupyter / Notebook
-.ipynb_checkpoints
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
