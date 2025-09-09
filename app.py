@@ -6,7 +6,7 @@ import pytesseract
 from PIL import Image
 
 st.set_page_config(page_title="PDF Extractor App", layout="wide")
-st.title("📄 PDF Extractor with OCR Support (No OpenCV)")
+st.title("📄 PDF Extractor with OCR/Table Support (No OpenCV)")
 
 uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
 
@@ -28,7 +28,7 @@ if uploaded_file:
         for line in pdf_text.splitlines():
             line = line.strip()
             if ":" not in line:
-                continue
+                continue  # Only split on lines with colon
 
             # Special case: File ID + Due Date in one line
             if "Due Date:" in line and "File ID" in line:
@@ -37,7 +37,6 @@ if uploaded_file:
                 pdf_data["Due Date"] = parts[1].strip()
                 continue
 
-            # Split only on first colon
             field, value = line.split(":", 1)
             field = field.strip()
             value = value.strip()
@@ -59,11 +58,10 @@ if uploaded_file:
             mime="text/csv"
         )
 
-    # ----------------------- OCR/Table Extraction -----------------------
+    # ----------------------- OCR/Table Extraction (No ':' Condition) -----------------------
     if st.button("OCR/Table Extraction to CSV"):
         st.info("🔍 Performing OCR... This may take a few seconds.")
 
-        # Convert PDF pages to images
         try:
             pages = convert_from_bytes(uploaded_file.read())
         except Exception as e:
@@ -72,23 +70,29 @@ if uploaded_file:
 
         if pages:
             ocr_data = {}
-            for page in pages:
-                # Convert page to grayscale image
-                gray_image = page.convert('L')  # L mode = grayscale
-
-                # OCR using pytesseract
+            for page_num, page in enumerate(pages, start=1):
+                # Convert page to grayscale
+                gray_image = page.convert("L")
+                # OCR text
                 text = pytesseract.image_to_string(gray_image)
-
-                for line in text.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # Split first colon as field-value
-                    if ":" in line:
-                        field, value = line.split(":", 1)
-                        field = field.strip()
-                        value = value.strip()
-                        if field and value:
+                # Split lines
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                
+                # For OCR/Table extraction, treat every **line as field-value pair**:
+                # The first word or phrase until a space is field, rest is value
+                for line in lines:
+                    parts = line.split(maxsplit=1)
+                    if len(parts) == 2:
+                        field, value = parts
+                    else:
+                        field = parts[0]
+                        value = ""
+                    # Only store if field is not empty
+                    if field:
+                        # If field already exists, append with separator
+                        if field in ocr_data:
+                            ocr_data[field] += " | " + value
+                        else:
                             ocr_data[field] = value
 
             ocr_data["Filename"] = uploaded_file.name
