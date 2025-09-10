@@ -30,7 +30,7 @@ def clean_text(text):
 def extract_fields_advanced(text):
     text = clean_text(text)
 
-    # List of known fields (adjust as needed)
+    # List of known fields (added Address and Appraiser)
     fields = [
         "How did you hear about us",
         "Date",
@@ -45,11 +45,13 @@ def extract_fields_advanced(text):
         "Reason for appraisal",
         "Appraisal Information",
         "Appraiser Fee",
+        "Appraiser",
         "Scheduled date",
         "Scheduled time",
         "ETA",
         "Access",
-        "Name on report"
+        "Name on report",
+        "Address",
     ]
 
     escaped_fields = [re.escape(f) for f in fields]
@@ -62,6 +64,13 @@ def extract_fields_advanced(text):
         field_name = parts[i].strip()
         if i + 1 < len(parts):
             value = parts[i + 1].strip()
+
+            # Accumulate multiline values for Address and Appraiser fields
+            j = i + 2
+            while j < len(parts) and not any(parts[j].strip().startswith(f) for f in fields):
+                value += " " + parts[j].strip()
+                j += 1
+            i = j - 1
         else:
             value = ""
         combined.append((field_name, value))
@@ -129,7 +138,25 @@ def extract_fields_advanced(text):
             if cleaned_value:
                 result[field] = cleaned_value
 
-    # Return as list of tuples for DataFrame
+    # If Address missing or empty, try to extract from Reason for appraisal or Property Information
+    if "Address" not in result or not result["Address"]:
+        for key in ["Reason for appraisal", "Property Information", "Address or Mixed"]:
+            if key in result:
+                # Simple regex for US address pattern (adjust if needed)
+                addr_match = re.search(
+                    r'(\d{1,5}\s[\w\s\.,\-]+,\s*[\w\s]+,\s*[A-Z]{2}\s*\d{5}(-\d{4})?)',
+                    result[key]
+                )
+                if addr_match:
+                    result["Address"] = addr_match.group(1).strip()
+                    break
+
+    # If Appraiser Fee missing, try to extract from Appraisal Information
+    if ("Appraiser Fee" not in result or not result["Appraiser Fee"]) and "Appraisal Information" in result:
+        fee_match = re.search(r"\$\d+(?:,\d{3})*(?:\.\d{2})?", result["Appraisal Information"])
+        if fee_match:
+            result["Appraiser Fee"] = fee_match.group(0)
+
     return list(result.items())
 
 # Additional cleaning for slight fixes requested
@@ -155,7 +182,7 @@ def clean_extracted_data(extracted):
 def main():
     st.title("OCR PDF Field Extractor with Post-Processing")
 
-    st.write("Upload an OCR-based PDF file. The app will perform OCR, extract fields, clean and parse them, then allow CSV download.")
+    st.write("Upload an OCR-based PDF file. The app will perform OCR, extract fields (including Address and Appraiser), clean and parse them, then allow CSV download.")
 
     uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
