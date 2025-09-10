@@ -3,51 +3,53 @@ import pytesseract
 import cv2
 import numpy as np
 import pandas as pd
+import re  # ✅ Import for regular expressions
 import tempfile
+from PIL import Image
 
-# Optional: Set the path to tesseract if needed
+# Optional: Set this if Tesseract is not in PATH
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-st.title("Private Commercial Appraisal OCR Extractor")
+st.title("Document Data Extraction App")
 
-st.write("Upload an image of the appraisal form and extract data as CSV.")
+st.write("Upload an image file of your form and extract the key fields as a CSV.")
 
-# File uploader
+# Upload file
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Save to temporary file
+    # Save file temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Load image with OpenCV
+    # Read image using OpenCV
     image = cv2.imread(file_path)
 
     # Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Apply adaptive thresholding
+    # Apply thresholding to improve OCR
     processed = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
     )
 
-    # Perform OCR
+    # OCR with pytesseract
     text = pytesseract.image_to_string(processed)
 
     st.subheader("Extracted Text")
     st.text_area("OCR Output", text, height=300)
 
-    # Parsing key fields with regex
+    # Parse fields using regex
     fields = {}
 
     # Date
-    date_match = st.text_input("Enter date pattern if needed", "Date[:\s]*(\d{1,2}/\d{1,2}/\d{2,4})")
+    date_match = st.text_input("Enter date pattern if needed", r"Date[:\s]*(\d{1,2}/\d{1,2}/\d{2,4})")
     match = re.search(date_match, text)
     if match:
         fields["Date"] = match.group(1)
 
-    # Email
+    # Client Email
     match = re.search(r'[\w\.-]+@[\w\.-]+', text)
     if match:
         fields["Client Email"] = match.group(0)
@@ -113,11 +115,11 @@ if uploaded_file is not None:
     st.subheader("Extracted Fields")
     st.dataframe(df)
 
-    # Allow download as CSV
+    # CSV download button
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download CSV",
         data=csv,
-        file_name="appraisal_data.csv",
+        file_name="extracted_data.csv",
         mime="text/csv"
     )
