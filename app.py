@@ -74,21 +74,35 @@ if uploaded_file:
             try:
                 pdf_images = convert_from_bytes(uploaded_file.read())
 
+                all_ocr_text = []  # For debugging
                 for i, page_img in enumerate(pdf_images):
                     # OCR extract text from image
                     text = pytesseract.image_to_string(page_img)
+                    all_ocr_text.append(f"--- Page {i+1} ---\n{text}")
                     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
                     for line in lines:
-                        # Split line into columns by 2+ spaces or tabs
-                        columns = re.split(r"\s{2,}|\t", line)
-                        if len(columns) > 1:  # Only keep valid table rows
-                            extracted_data.append(columns)
+                        # Try different splitting strategies
+                        if "\t" in line:
+                            columns = line.split("\t")
+                        else:
+                            columns = re.split(r"\s{2,}", line)
+
+                        # Keep rows that look like a table (2+ columns)
+                        if len(columns) > 1:
+                            extracted_data.append([col.strip() for col in columns if col.strip()])
 
                 if extracted_data:
                     # First row = headers, rest = data rows
                     headers = extracted_data[0]
                     rows = extracted_data[1:]
+
+                    # Pad rows to match header length
+                    max_len = len(headers)
+                    rows = [
+                        row + [""] * (max_len - len(row)) if len(row) < max_len else row[:max_len]
+                        for row in rows
+                    ]
 
                     df = pd.DataFrame(rows, columns=headers)
                     st.success("✅ Table data extracted with OCR!")
@@ -102,7 +116,11 @@ if uploaded_file:
                         mime="text/csv"
                     )
                 else:
-                    st.warning("⚠️ No table data could be extracted from this PDF.")
+                    st.warning("⚠️ OCR text extracted, but no table-like structure was detected.")
+
+                # Optional debug view
+                if st.checkbox("🔍 Show raw OCR text"):
+                    st.text("\n\n".join(all_ocr_text))
 
             except Exception as e:
                 st.error(f"OCR extraction failed: {e}")
