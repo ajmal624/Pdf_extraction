@@ -2,35 +2,49 @@ import streamlit as st
 import pandas as pd
 from docx import Document
 import io
+import re
 
-# ---------- Helper Function ----------
-def extract_docx_to_df(file):
+def extract_docx_smart(file):
     doc = Document(file)
-    text = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    data = []
 
-    # Simple heuristic: split by ":" to make field-value pairs
-    fields, values = [], []
-    for line in text:
-        if ":" in line:
-            parts = line.split(":", 1)
-            fields.append(parts[0].strip())
-            values.append(parts[1].strip())
+    # First, try to extract tables (forms are often in tables)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if len(cells) >= 2:
+                field = cells[0]
+                value = cells[1]
+                data.append((field, value))
+
+    # Next, parse free text paragraphs
+    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    for para in paragraphs:
+        if ":" in para:
+            field, value = para.split(":", 1)
+            data.append((field.strip(), value.strip()))
         else:
-            # If no ":", treat entire line as value without a field
-            fields.append("Unlabeled Field")
-            values.append(line.strip())
+            # Add non-labeled lines as their own row
+            data.append(("Unlabeled", para))
 
-    df = pd.DataFrame({"Field": fields, "Value": values})
+    # Clean duplicates
+    seen = set()
+    cleaned_data = []
+    for field, value in data:
+        if (field, value) not in seen and value:
+            cleaned_data.append((field, value))
+            seen.add((field, value))
+
+    df = pd.DataFrame(cleaned_data, columns=["Field", "Value"])
     return df
 
-# ---------- Streamlit UI ----------
-st.title("DOCX to CSV Extractor")
+# ---------- Streamlit App ----------
+st.title("Smart DOCX to CSV Extractor")
 
 uploaded_file = st.file_uploader("Upload a DOCX file", type=["docx"])
 
 if uploaded_file:
-    df = extract_docx_to_df(uploaded_file)
-
+    df = extract_docx_smart(uploaded_file)
     st.subheader("Extracted Data")
     st.dataframe(df)
 
