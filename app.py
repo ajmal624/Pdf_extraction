@@ -4,25 +4,22 @@ import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image
-import re
 
-st.title("Field Name Extraction from Image")
+st.title("Field Name Extractor from Image")
 
-uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Load image
+    # Load and preprocess image
     image = Image.open(uploaded_file)
     image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
 
-    # OCR with detailed data
+    # OCR extraction
     custom_config = r'--oem 3 --psm 6'
     data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
-
-    # Filter out empty texts and low confidence
-    data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
+    data = data[data.conf != -1]
 
     # Group by lines
     grouped = data.groupby(['block_num', 'par_num', 'line_num'])
@@ -32,19 +29,18 @@ if uploaded_file is not None:
         if line_text:
             lines.append(line_text)
 
-    # Known keywords to include lines
-    keywords = ["Information", "Address", "Commercial", "Appraisal", "Fee", "Schedule", "Access", "Name", "Date", "Telephone", "Email", "Reason"]
+    # Known keywords that likely represent field names
+    keywords = ["Date", "Client", "Information", "Property", "Commercial", "Address", "Reason", "Appraisal", "Fee", "Scheduled", "Time", "Access", "Name"]
 
     field_names = []
     for line in lines:
         original_line = line
         line = line.strip()
-        
-        # Normalize line by removing trailing values after colon
+
+        # Normalize line by splitting at colon
         if ':' in line:
             line = line.split(':')[0].strip()
-        
-        # Word count, numbers, and punctuation heuristics
+
         words = line.split()
         num_words = len(words)
         has_numbers = any(char.isdigit() for char in line)
@@ -54,11 +50,12 @@ if uploaded_file is not None:
         is_short = num_words <= 6
         has_keyword = any(kw.lower() in line.lower() for kw in keywords)
 
-        if is_short or has_keyword:
+        # Accept if it is short or has known keywords, but not if it's mostly noise
+        if (is_short or has_keyword) and punctuation_count < 5:
             if not has_numbers or has_keyword:
                 field_names.append(line)
 
-    # Remove duplicates and sort
+    # Remove duplicates and keep order
     seen = set()
     final_fields = []
     for name in field_names:
@@ -67,12 +64,12 @@ if uploaded_file is not None:
             seen.add(name)
             final_fields.append(name)
 
-    # Display extracted field names
+    # Display the final field names
     st.subheader("Extracted Field Names")
     for name in final_fields:
         st.write(name)
 
-    # Prepare CSV for download
+    # Save to CSV
     df = pd.DataFrame(final_fields, columns=["Field Name"])
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
