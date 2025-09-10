@@ -21,28 +21,26 @@ def is_probable_section_title(text):
     keywords = ['information', 'info', 'details', 'section', 'form', 'appraisal']
     return any(k in text.lower() for k in keywords)
 
-# Improved table extraction for multi-field rows
+# Extract multiple field-value pairs from a table row
 def extract_from_table(table):
     pairs = []
     for row in table.rows:
-        # Get non-empty, normalized cells
         cells = [normalize_text(c.text) for c in row.cells if normalize_text(c.text)]
         i = 0
         while i + 1 < len(cells):
             field, value = cells[i], cells[i + 1]
             if not is_probable_section_title(field):
                 pairs.append((field, value))
-            i += 2  # move to next field-value pair in the same row
+            i += 2
     return pairs
 
-# Improved paragraph extraction
+# Extract from paragraphs
 def extract_from_paragraphs(paragraphs):
     pairs = []
     for p in paragraphs:
         line = normalize_text(p)
         if not line:
             continue
-        # Accept multiple separators
         for sep in [":", "-"]:
             if sep in line:
                 field, value = line.split(sep, 1)
@@ -52,6 +50,7 @@ def extract_from_paragraphs(paragraphs):
                 break
     return pairs
 
+# Main extraction function
 def extract_docx_auto(docx_file):
     doc = Document(docx_file)
     pairs = []
@@ -69,7 +68,9 @@ def extract_docx_auto(docx_file):
     for k, v in pairs:
         cleaned[k] = v
 
-    return list(cleaned.items()), cleaned
+    # Convert to ordered list
+    final_pairs = [(k, cleaned[k]) for k in cleaned]
+    return final_pairs, cleaned
 
 # ---------- Streamlit UI ----------
 uploaded = st.file_uploader("Upload a DOCX file", type=["docx"])
@@ -79,30 +80,24 @@ if uploaded:
         if not pairs:
             st.warning("No fields/values were detected in this document.")
         else:
-            # Show editable table
-            pairs_df = pd.DataFrame(pairs, columns=["Field", "Value"])
-            edited = st.data_editor(pairs_df, num_rows="dynamic")
+            # Build two-row table for CSV
+            fields = [f for f, v in pairs]
+            values = [v for f, v in pairs]
+            final_df = pd.DataFrame([fields, values])
+            final_df.index = ["Field", "Value"]
 
-            if st.button("Build final table and download CSV"):
-                edited = edited.dropna(subset=["Field"]).copy()
-                fields = edited["Field"].map(normalize_text).tolist()
-                values = edited["Value"].map(normalize_text).tolist()
+            st.markdown("### Extracted Fields and Values")
+            st.dataframe(final_df)
 
-                final_df = pd.DataFrame([fields, values])
-                final_df.index = ["Field", "Value"]
-
-                st.markdown("### Final Table (Row 1 = Fields, Row 2 = Values)")
-                st.dataframe(final_df)
-
-                # Prepare CSV for download
-                buffer = io.StringIO()
-                final_df.to_csv(buffer, index=False, header=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=buffer.getvalue().encode("utf-8"),
-                    file_name="extracted_doc.csv",
-                    mime="text/csv"
-                )
+            # Download CSV
+            buffer = io.StringIO()
+            final_df.to_csv(buffer, index=False, header=False)
+            st.download_button(
+                label="Download CSV",
+                data=buffer.getvalue().encode("utf-8"),
+                file_name="extracted_doc.csv",
+                mime="text/csv"
+            )
     except Exception as e:
         st.error(f"Error reading DOCX: {e}")
 else:
