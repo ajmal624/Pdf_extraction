@@ -4,147 +4,93 @@ import cv2
 import numpy as np
 import pandas as pd
 import tempfile
+import re
 from PIL import Image
 
-# Optional: Set this if Tesseract is not in PATH
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+st.title("Custom OCR Field Extractor")
 
-st.title("Document Data Extraction with Coordinates")
+st.write("""
+Upload an image, then specify field names and regex patterns to extract information from the document.
+""")
 
-st.write("Upload an image and extract fields using OCR with position filtering.")
-
+# Upload image
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
-    # Save the uploaded image temporarily
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-        tmp_file.write(uploaded_file.read())
-        file_path = tmp_file.name
+# User enters field names and patterns
+st.subheader("Define Fields and Patterns")
 
-    # Load the image
-    image = cv2.imread(file_path)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+fields = {}
+field_names = st.text_area("Enter field names (one per line)", help="E.g. Date, Client Email, Phone Number")
+patterns = st.text_area("Enter corresponding regex patterns (one per line)", help="Use Python regex. One pattern per line.")
 
-    # OCR with detailed data
-    custom_config = r'--oem 3 --psm 6'
-    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
+if uploaded_file and field_names and patterns:
+    field_list = [f.strip() for f in field_names.splitlines() if f.strip()]
+    pattern_list = [p.strip() for p in patterns.splitlines() if p.strip()]
 
-    # Remove empty text entries and low confidence results
-    data = data[data.conf != -1]
-    data = data.dropna(subset=['text'])
+    if len(field_list) != len(pattern_list):
+        st.error("Number of fields and patterns must match!")
+    else:
+        # Create dictionary of fields and patterns
+        fields = dict(zip(field_list, pattern_list))
 
-    # Group by line number
-    grouped = data.groupby(['block_num', 'par_num', 'line_num'])
+        # Save the uploaded image temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+            tmp_file.write(uploaded_file.read())
+            file_path = tmp_file.name
 
-    lines = []
-    for (block, par, line), group in grouped:
-        line_text = ' '.join(group.text)
-        x = group.left.min()
-        y = group.top.min()
-        lines.append({'text': line_text, 'x': x, 'y': y})
+        # Load and preprocess image
+        image = cv2.imread(file_path)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Sort lines by their y-coordinate (top to bottom)
-    lines = sorted(lines, key=lambda x: x['y'])
+        # OCR with detailed data
+        custom_config = r'--oem 3 --psm 6'
+        data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
 
-    st.subheader("Detected Lines")
-    for line in lines:
-        st.write(f"{line['y']}: {line['text']}")
+        # Clean data
+        data = data[data.conf != -1]
+        data = data.dropna(subset=['text'])
 
-    # Extract fields based on keywords and proximity
-    fields = {}
+        # Combine lines by block, paragraph, and line numbers
+        grouped = data.groupby(['block_num', 'par_num', 'line_num'])
+        lines = []
+        for (_, _, _), group in grouped:
+            text = ' '.join(group.text)
+            x = group.left.min()
+            y = group.top.min()
+            lines.append({'text': text, 'x': x, 'y': y})
 
-    # Create a simple function to find line by keyword
-    def find_line(keyword):
+        # Sort lines by y-coordinate
+        lines = sorted(lines, key=lambda l: l['y'])
+
+        # Show all detected lines
+        st.subheader("Detected Text Lines")
         for line in lines:
-            if keyword.lower() in line['text'].lower():
-                return line['text']
-        return None
+            st.write(f"{line['y']}: {line['text']}")
 
-    # Date
-    date_line = find_line("Date")
-    if date_line:
-        fields["Date"] = date_line.split("Date")[-1].strip(" :")
+        # Extract fields based on user-defined patterns
+        extracted = {}
+        for field, pattern in fields.items():
+            found = None
+            regex = re.compile(pattern, re.IGNORECASE)
+            for line in lines:
+                match = regex.search(line['text'])
+                if match:
+                    found = match.group().strip()
+                    break
+            extracted[field] = found if found else "Not Found"
 
-    # Client Email
-    email_line = None
-    for line in lines:
-        if "@" in line['text']:
-            email_line = line['text']
-            break
-    if email_line:
-        fields["Client Email"] = email_line.strip()
+        # Display extracted fields
+        st.subheader("Extracted Data")
+        df = pd.DataFrame(list(extracted.items()), columns=["Field", "Value"])
+        st.dataframe(df)
 
-    # Client Telephone
-    phone_line = None
-    import re
-    phone_pattern = re.compile(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}')
-    for line in lines:
-        if phone_pattern.search(line['text']):
-            phone_line = line['text']
-            break
-    if phone_line:
-        fields["Client Telephone"] = phone_pattern.search(phone_line).group()
-
-    # Client Name
-    name_line = find_line("Name")
-    if name_line:
-        fields["Client Name"] = name_line.split("Name")[-1].strip(" :")
-
-    # Property Address
-    address_line = find_line("Address")
-    if address_line:
-        fields["Property Address"] = address_line.split("Address")[-1].strip(" :")
-
-    # Commercial or Mixed
-    comm_line = find_line("Commercial or Mixed")
-    if comm_line:
-        fields["Commercial or Mixed"] = comm_line.split("Commercial or Mixed")[-1].strip(" :")
-
-    # Reason for appraisal
-    reason_line = find_line("Reason for appraisal")
-    if reason_line:
-        fields["Reason for appraisal"] = reason_line.split("Reason for appraisal")[-1].strip(" :")
-
-    # Appraiser Fee
-    fee_line = find_line("Appraiser Fee")
-    if fee_line:
-        fields["Appraiser Fee"] = fee_line.split("Appraiser Fee")[-1].strip(" :")
-
-    # Scheduled Date
-    sched_date_line = find_line("Scheduled date")
-    if sched_date_line:
-        fields["Scheduled date"] = sched_date_line.split("Scheduled date")[-1].strip(" :")
-
-    # Scheduled Time
-    sched_time_line = find_line("Scheduled time")
-    if sched_time_line:
-        fields["Scheduled time"] = sched_time_line.split("Scheduled time")[-1].strip(" :")
-
-    # ETA Standard
-    eta_line = find_line("ETA Standard")
-    if eta_line:
-        fields["ETA Standard"] = eta_line.split("ETA Standard")[-1].strip(" :")
-
-    # Access
-    access_line = find_line("Access")
-    if access_line:
-        fields["Access"] = access_line.split("Access")[-1].strip(" :")
-
-    # Name on Report
-    report_line = find_line("Name on report")
-    if report_line:
-        fields["Name on report"] = report_line.split("Name on report")[-1].strip(" :")
-
-    # Display fields
-    st.subheader("Extracted Fields")
-    df = pd.DataFrame(list(fields.items()), columns=["Field", "Value"])
-    st.dataframe(df)
-
-    # CSV download
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download CSV",
-        data=csv,
-        file_name="extracted_data.csv",
-        mime="text/csv"
-    )
+        # Download CSV
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download CSV",
+            data=csv,
+            file_name="extracted_data.csv",
+            mime="text/csv"
+        )
+else:
+    st.info("Please upload an image and define fields with regex patterns.")
