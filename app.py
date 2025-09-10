@@ -7,86 +7,105 @@ import tempfile
 import re
 from PIL import Image
 
-st.title("Document OCR Field Extraction")
+st.title("Document Data Extraction with Heuristics")
 
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Save uploaded image temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Load and preprocess the image
+    # Load image and preprocess
     image = cv2.imread(file_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
 
-    # OCR with detailed data
+    # OCR extraction
     custom_config = r'--oem 3 --psm 6'
     data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
+    data = data[data.conf != -1].dropna(subset=['text'])
 
-    # Clean data: remove empty or low confidence entries
-    data = data[data.conf != -1]
-    data = data.dropna(subset=['text'])
-
-    # Group lines by block, paragraph, and line number
-    grouped = data.groupby(['block_num', 'par_num', 'line_num'])
+    # Group lines by proximity
     lines = []
-    for (_, _, _), group in grouped:
-        text = ' '.join(group.text)
-        x = group.left.min()
-        y = group.top.min()
-        lines.append({'text': text, 'x': x, 'y': y})
+    for _, row in data.iterrows():
+        lines.append({
+            'text': row['text'],
+            'x': row['left'],
+            'y': row['top'],
+            'w': row['width'],
+            'h': row['height']
+        })
 
-    # Sort lines by y coordinate (top to bottom)
+    # Sort by vertical position
     lines = sorted(lines, key=lambda l: l['y'])
 
-    st.subheader("Detected Lines")
+    # Merge lines that are close to each other vertically
+    merged_lines = []
+    threshold = 10  # pixels
     for line in lines:
+        if not merged_lines:
+            merged_lines.append(line)
+            continue
+        prev = merged_lines[-1]
+        if abs(line['y'] - (prev['y'] + prev['h'])) < threshold:
+            # Merge text
+            prev['text'] += " " + line['text']
+            prev['h'] = max(prev['h'], line['h'])
+        else:
+            merged_lines.append(line)
+
+    st.subheader("Merged Lines")
+    for line in merged_lines:
         st.write(f"{line['y']}: {line['text']}")
 
-    # Define patterns to extract fields (hardcoded but scanning lines)
+    # Define patterns
     patterns = {
-        "Date": r'Date[:\s]*(\d{1,2}/\d{1,2}/\d{2,4})',
-        "Client Email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b',
-        "Client Telephone": r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
-        "Client Name": r'Name[:\s]*(.+)',
-        "Property Address": r'Address[:\s]*(.+)',
-        "Commercial or Mixed": r'(Commercial|Mixed)',
-        "Reason for appraisal": r'Reason[:\s]*(.+)',
-        "Appraiser Fee": r'Fee[:\s]*\$?([\d,]+)',
-        "Scheduled date": r'Scheduled date[:\s]*(\d{1,2}/\d{1,2}/\d{2,4})',
-        "Scheduled time": r'Scheduled time[:\s]*(\d{1,2}[:.\s]?\d{2}\s*(AM|PM)?)',
-        "ETA Standard": r'ETA[:\s]*(.+)',
-        "Access": r'Access[:\s]*(.+)',
-        "Name on report": r'Name on report[:\s]*(.+)'
+        'Date': r'\b\d{1,2}/\d{1,2}/\d{2,4}\b',
+        'Client Email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b',
+        'Client Telephone': r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'
     }
 
-    # Extract fields by scanning all lines
-    extracted = {}
-    for field, pattern in patterns.items():
-        found = None
-        regex = re.compile(pattern, re.IGNORECASE)
+    # Heuristic extraction function
+    def extract_field(pattern, lines):
         for line in lines:
-            match = regex.search(line['text'])
+            match = re.search(pattern, line['text'])
             if match:
-                if match.groups():
-                    found = match.group(1).strip()
-                else:
-                    found = match.group().strip()
-                break
-        extracted[field] = found if found else "Not Found"
+                return match.group()
+        return "Not Found"
 
-    # Display extracted fields
-    st.subheader("Extracted Fields")
-    df = pd.DataFrame(list(extracted.items()), columns=["Field", "Value"])
+    # Extract fields
+    fields = {}
+    fields['Date'] = extract_field(patterns['Date'], merged_lines)
+    fields['Client Email'] = extract_field(patterns['Client Email'], merged_lines)
+    fields['Client Telephone'] = extract_field(patterns['Client Telephone'], merged_lines)
+
+    # Heuristic for other fields without patterns
+    def extract_by_context(keywords, lines):
+        for line in lines:
+            for kw in keywords:
+                if kw.lower() in line['text'].lower():
+                    # Extract part after keyword or full line if needed
+                    parts = line['text'].split(kw)
+                    if len(parts) > 1 and parts[1].strip():
+                        return parts[1].strip()
+                    else:
+                        return line['text'].strip()
+        return "Not Found"
+
+    fields['Client Name'] = extract_by_context(["Name", "Client", "Contact"], merged_lines)
+    fields['Property Address'] = extract_by_context(["Address", "Location", "Site"], merged_lines)
+    fields['Reason for appraisal'] = extract_by_context(["Reason", "Purpose"], merged_lines)
+    fields['Appraiser Fee'] = extract_by_context(["Fee", "Cost", "Charge"], merged_lines)
+    fields['ETA Standard'] = extract_by_context(["ETA", "Turnaround", "Expected"], merged_lines)
+    fields['Access'] = extract_by_context(["Access", "Entry", "Availability"], merged_lines)
+    fields['Name on report'] = extract_by_context(["Name on report", "Report Title"], merged_lines)
+
+    # Display results
+    st.subheader("Extracted Fields with Heuristics")
+    df = pd.DataFrame(list(fields.items()), columns=["Field", "Value"])
     st.dataframe(df)
 
-    # CSV download
+    # CSV Download
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download CSV",
-        data=csv,
-        file_name="extracted_data.csv",
-        mime="text/csv"
-    )
+    st.download_button("Download CSV", data=csv, file_name="extracted_data.csv", mime="text/csv")
