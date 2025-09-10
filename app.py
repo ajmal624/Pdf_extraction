@@ -1,22 +1,20 @@
 import streamlit as st
-import pdfplumber
+import pytesseract
+from pdf2image import convert_from_bytes
 import re
 import pandas as pd
-from io import StringIO, BytesIO
+from io import StringIO
 
-# Function to extract text from uploaded PDF file
-def extract_text_from_pdf(file):
+# OCR extraction from PDF bytes
+def ocr_pdf(file_bytes):
+    images = convert_from_bytes(file_bytes)
     text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
+    for img in images:
+        text += pytesseract.image_to_string(img) + "\n"
     return text
 
-# Function to extract fields and values using regex
+# Extract fields and values using regex
 def extract_fields(text):
-    # Adjust this regex pattern based on your PDF's field-value format
     pattern = re.compile(r"(?P<field>[A-Za-z0-9 _-]+)\s*[:\-]\s*(?P<value>.+)")
     fields = {}
     for line in text.splitlines():
@@ -27,24 +25,23 @@ def extract_fields(text):
             fields[field] = value
     return fields
 
-# Streamlit app
 def main():
-    st.title("PDF Field Extractor and CSV Exporter")
+    st.title("OCR PDF Field Extractor and CSV Exporter")
 
-    st.write("Upload a PDF file containing fields and values. The app will extract the fields and their corresponding values and allow you to download them as a CSV file.")
+    st.write("Upload an OCR-based PDF file. The app will perform OCR to extract text, then extract fields and values, and allow CSV download.")
 
     uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
     if uploaded_file is not None:
-        # Extract text from PDF
-        with st.spinner("Extracting text from PDF..."):
-            text = extract_text_from_pdf(uploaded_file)
+        file_bytes = uploaded_file.read()
+
+        with st.spinner("Performing OCR on PDF pages..."):
+            text = ocr_pdf(file_bytes)
 
         if not text.strip():
-            st.error("No text found in the PDF.")
+            st.error("No text found after OCR. Please check the PDF or try a different file.")
             return
 
-        # Extract fields and values
         fields = extract_fields(text)
 
         if not fields:
@@ -52,17 +49,14 @@ def main():
             st.info("You may need to adjust the regex pattern in the code to match your PDF format.")
             return
 
-        # Show extracted data
         st.subheader("Extracted Fields and Values")
         df = pd.DataFrame([fields])
         st.dataframe(df)
 
-        # Convert dataframe to CSV
         csv_buffer = StringIO()
         df.to_csv(csv_buffer, index=False)
         csv_data = csv_buffer.getvalue()
 
-        # Provide download button
         st.download_button(
             label="Download extracted data as CSV",
             data=csv_data,
