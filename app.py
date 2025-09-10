@@ -1,104 +1,83 @@
 import streamlit as st
 import pandas as pd
-from docx import Document
+import pdfplumber
 import io
-import re
 
 st.set_page_config(layout="wide")
-st.title("DOCX → CSV Extractor (Fields as Columns)")
+st.title("PDF → CSV Extractor (Bold=Value, Regular=Field)")
 
-# ---------- Helpers ----------
-def normalize_text(text):
-    """Clean text."""
-    if not text:
-        return ""
-    text = re.sub(r'[\r\n\t]+', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text.strip(' "\'`')
+def extract_pdf_bold_values(pdf_file):
+    """
+    Extract fields and values from PDF.
+    Bold text is treated as value, regular as field.
+    Returns dict {field: value}.
+    """
+    fields = []
+    values = []
 
-def is_probable_section_title(text):
-    """Skip section headers."""
-    if not text:
-        return False
-    keywords = ['information', 'info', 'details', 'section', 'form', 'appraisal']
-    return any(k in text.lower() for k in keywords)
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(extra_attrs=["fontname", "size"])
+            
+            # Group consecutive bold or regular words
+            i = 0
+            while i < len(words):
+                word = words[i]
+                text = word["text"].strip()
+                font = word["fontname"].lower()
 
-def extract_from_table(table):
-    """Extract multiple field-value pairs per row."""
-    pairs = []
-    for row in table.rows:
-        cells = [normalize_text(c.text) for c in row.cells if normalize_text(c.text)]
-        i = 0
-        while i + 1 < len(cells):
-            field, value = cells[i], cells[i + 1]
-            if not is_probable_section_title(field):
-                pairs.append((field, value))
-            i += 2
-    return pairs
+                # Treat bold fonts as value
+                if "bold" in font:
+                    # Merge consecutive bold words
+                    value_text = [text]
+                    i += 1
+                    while i < len(words) and "bold" in words[i]["fontname"].lower():
+                        value_text.append(words[i]["text"].strip())
+                        i += 1
+                    values.append(" ".join(value_text))
+                else:
+                    # Merge consecutive regular words as field
+                    field_text = [text]
+                    i += 1
+                    while i < len(words) and "bold" not in words[i]["fontname"].lower():
+                        field_text.append(words[i]["text"].strip())
+                        i += 1
+                    fields.append(" ".join(field_text))
 
-def extract_from_paragraphs(paragraphs):
-    """Extract field-value pairs from paragraphs."""
-    pairs = []
-    for p in paragraphs:
-        line = normalize_text(p)
-        if not line:
-            continue
-        for sep in [":", "-"]:
-            if sep in line:
-                field, value = line.split(sep, 1)
-                field, value = normalize_text(field), normalize_text(value)
-                if field and not is_probable_section_title(field):
-                    pairs.append((field, value))
-                break
-    return pairs
+    # Pair fields and values
+    final_dict = {}
+    for f, v in zip(fields, values):
+        final_dict[f] = v
 
-def extract_docx_pairs(docx_file):
-    """Extract cleaned field-value pairs from a DOCX."""
-    doc = Document(docx_file)
-    pairs = []
-
-    # Tables
-    for table in doc.tables:
-        pairs.extend(extract_from_table(table))
-
-    # Paragraphs
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    pairs.extend(extract_from_paragraphs(paragraphs))
-
-    # Deduplicate, last value wins
-    cleaned = {}
-    for k, v in pairs:
-        cleaned[k] = v
-
-    return cleaned
+    return final_dict
 
 # ---------- Streamlit UI ----------
-uploaded_files = st.file_uploader("Upload one or more DOCX files", type=["docx"], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "Upload one or more PDF files", type=["pdf"], accept_multiple_files=True
+)
 
 if uploaded_files:
     all_rows = []
+    all_fields = set()
 
     for uploaded in uploaded_files:
         try:
-            row_dict = extract_docx_pairs(uploaded)
+            row_dict = extract_pdf_bold_values(uploaded)
+            all_fields.update(row_dict.keys())
             all_rows.append(row_dict)
         except Exception as e:
             st.error(f"Error reading {uploaded.name}: {e}")
 
     if all_rows:
-        # Get all unique fields for columns
-        all_fields = set()
-        for row in all_rows:
-            all_fields.update(row.keys())
+        # Sort fields for consistent column order
         all_fields = list(all_fields)
 
-        # Build dataframe
-        final_rows = []
+        final_data = []
         for row in all_rows:
             final_row = [row.get(f, "") for f in all_fields]
-            final_rows.append(final_row)
+            final_data.append(final_row)
 
-        final_df = pd.DataFrame(final_rows, columns=all_fields)
+        final_df = pd.DataFrame(final_data, columns=all_fields)
         st.markdown("### Extracted Data")
         st.dataframe(final_df)
 
@@ -108,18 +87,18 @@ if uploaded_files:
         st.download_button(
             label="Download CSV",
             data=buffer.getvalue().encode("utf-8"),
-            file_name="extracted_docx_data.csv",
+            file_name="extracted_pdf_data.csv",
             mime="text/csv"
         )
 else:
-    st.info("Upload one or more DOCX files to extract fields and values.")
+    st.info("Upload one or more PDF files to extract fields and values.")
 
 st.markdown("""
 **How this works:**  
-- Extracts **tables and paragraphs** from DOCX  
-- Handles **multiple field-value pairs per row**  
-- Skips section headers automatically  
-- Produces a **CSV**:
-  - Columns = all fields  
-  - Rows = one DOCX per row
+- **Bold text** is treated as the value  
+- **Regular text** is treated as the field  
+- Handles **multi-word fields and values**  
+- Produces a CSV with:
+  - Columns = fields
+  - Rows = one PDF per row
 """)
