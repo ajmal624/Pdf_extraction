@@ -5,3 +5,4 @@ pytesseract
 pandas
 python-docx
 Pillow
+opencv-python-headless==4.8.1.78
