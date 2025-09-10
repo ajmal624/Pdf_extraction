@@ -2,45 +2,52 @@ import streamlit as st
 import pandas as pd
 from docx import Document
 import io
+import re
 
-def extract_docx_as_columns(file):
+def clean_field_name(field):
+    # Normalize field names
+    field = re.sub(r'\s+', ' ', field.strip())  # Remove extra spaces
+    field = field.replace("\n", " ")
+    return field
+
+def extract_docx_clean_one_row(file):
     doc = Document(file)
     data = {}
+    skip_headers = ["Client Information", "Property Information", "Appraisal Information"]
 
-    # Extract data from tables
+    # Extract tables
     for table in doc.tables:
         for row in table.rows:
-            cells = [cell.text.strip() for cell in row.cells]
+            cells = [clean_field_name(c.text) for c in row.cells]
             if len(cells) >= 2:
-                field = cells[0].strip()
-                value = cells[1].strip()
-                if field and value:
+                field, value = cells[0], cells[1]
+                if field and value and field not in skip_headers:
                     data[field] = value
 
-    # Extract data from paragraphs
+    # Extract paragraph data
     for para in doc.paragraphs:
         line = para.text.strip()
         if ":" in line:
             parts = line.split(":", 1)
-            field, value = parts[0].strip(), parts[1].strip()
-            if field and value:
+            field, value = clean_field_name(parts[0]), clean_field_name(parts[1])
+            if field and value and field not in skip_headers:
                 data[field] = value
 
-    # Convert to DataFrame with one row
+    # Create single-row DataFrame
     df = pd.DataFrame([data])
     return df
 
 # ---------- Streamlit App ----------
-st.title("DOCX to CSV (Fields as Columns)")
+st.title("DOCX to CSV (Clean Single-Row Extractor)")
 
 uploaded_file = st.file_uploader("Upload a DOCX file", type=["docx"])
 
 if uploaded_file:
-    df = extract_docx_as_columns(uploaded_file)
-    st.subheader("Extracted Data (Fields as Columns)")
+    df = extract_docx_clean_one_row(uploaded_file)
+    st.subheader("Extracted Clean Table")
     st.dataframe(df)
 
-    # Save as CSV
+    # Save CSV
     csv_buffer = io.BytesIO()
     df.to_csv(csv_buffer, index=False)
     csv_buffer.seek(0)
