@@ -6,17 +6,15 @@ import pytesseract
 from io import BytesIO
 import re
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App")
 
 # ----------- Preprocessing for better OCR (Pillow only) -----------
 def preprocess_image(pil_img):
-    # Convert to grayscale
-    img = pil_img.convert("L")
-    # Apply binary threshold
-    img = img.point(lambda x: 0 if x < 150 else 255, "1")
+    img = pil_img.convert("L")  # grayscale
+    img = img.point(lambda x: 0 if x < 150 else 255, "1")  # threshold
     return img
 
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
@@ -53,12 +51,19 @@ if uploaded_file:
 
             if pdf_text.strip():
                 pdf_data = {}
+                current_field = None
+
                 for line in pdf_text.splitlines():
                     line = line.strip()
-                    if ":" not in line:
+                    if not line:
                         continue
-                    field, value = line.split(":", 1)
-                    pdf_data[field.strip()] = value.strip()
+
+                    if ":" in line:  # Field: Value
+                        field, value = line.split(":", 1)
+                        pdf_data[field.strip()] = value.strip()
+                        current_field = field.strip()
+                    elif current_field:  # continuation of previous value
+                        pdf_data[current_field] += " " + line
 
                 if pdf_data:
                     df = pd.DataFrame([pdf_data])
@@ -75,7 +80,7 @@ if uploaded_file:
                 else:
                     st.warning("⚠️ No data extracted from this PDF.")
 
-    # -------------------- OCR Extraction to CSV (Table Format) --------------------
+    # -------------------- OCR Extraction to CSV (Better Table Alignment) --------------------
     with col2:
         if st.button("Table Extraction to CSV (OCR)"):
             uploaded_file.seek(0)
@@ -86,31 +91,55 @@ if uploaded_file:
                 all_ocr_text = []
 
                 for i, page_img in enumerate(pdf_images):
-                    # Preprocess + OCR with structured output
                     processed_img = preprocess_image(page_img)
+
+                    # Get OCR results with positions
                     data = pytesseract.image_to_data(
-                        processed_img, output_type=pytesseract.Output.DATAFRAME, config="--psm 6"
+                        processed_img,
+                        output_type=pytesseract.Output.DATAFRAME,
+                        config="--psm 6"
                     )
 
-                    # Drop empty rows
+                    # Drop empty
                     data = data.dropna(subset=["text"])
                     if data.empty:
                         continue
 
                     all_ocr_text.append(f"--- Page {i+1} ---\n" + "\n".join(data["text"].tolist()))
 
-                    # Group by OCR 'line_num' to reconstruct rows
-                    for _, row_group in data.groupby("line_num"):
-                        row_text = [str(x).strip() for x in row_group["text"].tolist() if str(x).strip()]
-                        if len(row_text) > 1:  # only keep rows that look tabular
-                            extracted_rows.append(row_text)
+                    # Group words by line_num
+                    for line_num, row_group in data.groupby("line_num"):
+                        words = row_group[["left", "text"]].values.tolist()
+                        words = [(int(x), str(t).strip()) for x, t in words if t.strip()]
+
+                        if not words:
+                            continue
+
+                        # Sort by x-position
+                        words.sort(key=lambda x: x[0])
+
+                        # Group into columns by x gaps
+                        row = []
+                        current_col = []
+                        prev_x = None
+
+                        for x, word in words:
+                            if prev_x is not None and x - prev_x > 50:  # gap = new column
+                                row.append(" ".join(current_col))
+                                current_col = []
+                            current_col.append(word)
+                            prev_x = x
+                        if current_col:
+                            row.append(" ".join(current_col))
+
+                        if len(row) > 1:  # keep tabular rows
+                            extracted_rows.append(row)
 
                 if extracted_rows:
-                    # Assume first row = headers
                     headers = extracted_rows[0]
                     rows = extracted_rows[1:]
 
-                    # Pad rows to match header length
+                    # Normalize row lengths
                     max_len = len(headers)
                     rows = [
                         row + [""] * (max_len - len(row)) if len(row) < max_len else row[:max_len]
@@ -131,7 +160,6 @@ if uploaded_file:
                 else:
                     st.warning("⚠️ OCR text extracted, but no table-like structure was detected.")
 
-                # Debugging option: show raw OCR text
                 if st.checkbox("🔍 Show raw OCR text"):
                     st.text("\n\n".join(all_ocr_text))
 
