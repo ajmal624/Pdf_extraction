@@ -1,113 +1,123 @@
 import streamlit as st
+import pytesseract
+import cv2
+import numpy as np
 import pandas as pd
-from docx import Document
-import io
+import tempfile
 
-st.set_page_config(layout="wide")
-st.title("DOCX → CSV Extractor (Bold=Value, Regular=Field)")
+# Optional: Set the path to tesseract if needed
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-def extract_docx_bold_values(docx_file):
-    """
-    Extract fields and values from Word file based on bold formatting.
-    Bold text is treated as value, regular as field.
-    Returns dict {field: value}.
-    """
-    doc = Document(docx_file)
-    fields = []
-    values = []
+st.title("Private Commercial Appraisal OCR Extractor")
 
-    # Process paragraphs
-    for para in doc.paragraphs:
-        current_field = ""
-        current_value = ""
-        for run in para.runs:
-            text = run.text.strip()
-            if not text:
-                continue
-            if run.bold:
-                # Bold → value
-                current_value += (text + " ")
-            else:
-                # Regular → field
-                current_field += (text + " ")
+st.write("Upload an image of the appraisal form and extract data as CSV.")
 
-        # If we have both field and value, store them
-        if current_field and current_value:
-            fields.append(current_field.strip())
-            values.append(current_value.strip())
+# File uploader
+uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
-    # Process tables
-    for table in doc.tables:
-        for row in table.rows:
-            cells = []
-            for cell in row.cells:
-                cell_text = ""
-                for para in cell.paragraphs:
-                    for run in para.runs:
-                        cell_text += run.text.strip() + " "
-                cells.append(cell_text.strip())
-            # Pair sequential cells: non-bold=field, bold=value
-            i = 0
-            while i + 1 < len(cells):
-                fields.append(cells[i])
-                values.append(cells[i + 1])
-                i += 2
+if uploaded_file is not None:
+    # Save to temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        file_path = tmp_file.name
 
-    # Merge into dict
-    final_dict = {}
-    for f, v in zip(fields, values):
-        final_dict[f] = v
+    # Load image with OpenCV
+    image = cv2.imread(file_path)
 
-    return final_dict
+    # Convert to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-# ---------- Streamlit UI ----------
-uploaded_files = st.file_uploader(
-    "Upload one or more DOCX files", type=["docx"], accept_multiple_files=True
-)
+    # Apply adaptive thresholding
+    processed = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
 
-if uploaded_files:
-    all_rows = []
-    all_fields = set()
+    # Perform OCR
+    text = pytesseract.image_to_string(processed)
 
-    for uploaded in uploaded_files:
-        try:
-            row_dict = extract_docx_bold_values(uploaded)
-            all_fields.update(row_dict.keys())
-            all_rows.append(row_dict)
-        except Exception as e:
-            st.error(f"Error reading {uploaded.name}: {e}")
+    st.subheader("Extracted Text")
+    st.text_area("OCR Output", text, height=300)
 
-    if all_rows:
-        # Sort fields for consistent column order
-        all_fields = list(all_fields)
+    # Parsing key fields with regex
+    fields = {}
 
-        final_data = []
-        for row in all_rows:
-            final_row = [row.get(f, "") for f in all_fields]
-            final_data.append(final_row)
+    # Date
+    date_match = st.text_input("Enter date pattern if needed", "Date[:\s]*(\d{1,2}/\d{1,2}/\d{2,4})")
+    match = re.search(date_match, text)
+    if match:
+        fields["Date"] = match.group(1)
 
-        final_df = pd.DataFrame(final_data, columns=all_fields)
-        st.markdown("### Extracted Data")
-        st.dataframe(final_df)
+    # Email
+    match = re.search(r'[\w\.-]+@[\w\.-]+', text)
+    if match:
+        fields["Client Email"] = match.group(0)
 
-        # Download CSV
-        buffer = io.StringIO()
-        final_df.to_csv(buffer, index=False)
-        st.download_button(
-            label="Download CSV",
-            data=buffer.getvalue().encode("utf-8"),
-            file_name="extracted_docx_data.csv",
-            mime="text/csv"
-        )
-else:
-    st.info("Upload one or more DOCX files to extract fields and values.")
+    # Telephone
+    match = re.search(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', text)
+    if match:
+        fields["Client Telephone"] = match.group(0)
 
-st.markdown("""
-**How this works:**  
-- **Bold text** in Word is treated as value  
-- **Regular text** is treated as field  
-- Handles **paragraphs and tables**  
-- Produces a CSV with:
-  - Columns = fields
-  - Rows = one DOCX per row
-""")
+    # Name
+    name_match = re.search(r'Name[:\s]*(.*)', text)
+    if name_match:
+        fields["Client Name"] = name_match.group(1).strip()
+
+    # Address
+    address_match = re.search(r'Address[:\s]*(.*)', text)
+    if address_match:
+        fields["Property Address"] = address_match.group(1).strip()
+
+    # Commercial or Mixed
+    comm_match = re.search(r'Commercial or Mixed[:\s]*(.*)', text)
+    if comm_match:
+        fields["Commercial or Mixed"] = comm_match.group(1).strip()
+
+    # Reason for appraisal
+    reason_match = re.search(r'Reason for appraisal\?[:\s]*(.*)', text, re.DOTALL)
+    if reason_match:
+        fields["Reason for appraisal"] = reason_match.group(1).strip()
+
+    # Appraiser Fee
+    fee_match = re.search(r'Appraiser Fee[:\s]*(.*)', text)
+    if fee_match:
+        fields["Appraiser Fee"] = fee_match.group(1).strip()
+
+    # Scheduled Date
+    sched_date_match = re.search(r'Scheduled date[:\s]*(.*)', text)
+    if sched_date_match:
+        fields["Scheduled date"] = sched_date_match.group(1).strip()
+
+    # Scheduled Time
+    sched_time_match = re.search(r'Scheduled time[:\s]*(.*)', text)
+    if sched_time_match:
+        fields["Scheduled time"] = sched_time_match.group(1).strip()
+
+    # ETA Standard
+    eta_match = re.search(r'ETA Standard is (.*)', text)
+    if eta_match:
+        fields["ETA Standard"] = eta_match.group(1).strip()
+
+    # Access
+    access_match = re.search(r'Access to (.*)', text)
+    if access_match:
+        fields["Access"] = "Access to " + access_match.group(1).strip()
+
+    # Name on Report
+    report_match = re.search(r'Name on report[:\s]*(.*)', text, re.DOTALL)
+    if report_match:
+        fields["Name on report"] = report_match.group(1).strip()
+
+    # Create DataFrame
+    df = pd.DataFrame(list(fields.items()), columns=["Field", "Value"])
+
+    st.subheader("Extracted Fields")
+    st.dataframe(df)
+
+    # Allow download as CSV
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download CSV",
+        data=csv,
+        file_name="appraisal_data.csv",
+        mime="text/csv"
+    )
