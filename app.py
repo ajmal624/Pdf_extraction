@@ -30,7 +30,7 @@ def clean_text(text):
 def extract_fields_advanced(text):
     text = clean_text(text)
 
-    # List of known fields (adjust as needed)
+    # Known fields with variants added
     fields = [
         "How did you hear about us",
         "Date",
@@ -38,13 +38,18 @@ def extract_fields_advanced(text):
         "Name",
         "Telephone",
         "Email",
+        "Property Address",          # Added
+        "Address",                   # Variant
+        "Property Location",         # Variant
         "Property Information",
         "Commercial or Mixed",
         "Commercial isal?",
         "Address or Mixed",
         "Reason for appraisal",
         "Appraisal Information",
-        "Appraiser Fee",
+        "Appraiser Fee",             # Added
+        "Appraiser",                 # Variant
+        "Fee",                       # Variant
         "Scheduled date",
         "Scheduled time",
         "ETA",
@@ -67,7 +72,6 @@ def extract_fields_advanced(text):
         combined.append((field_name, value))
         i += 2
 
-    # Post-processing to merge and clean fields
     result = {}
 
     # Helper to extract subfields from Client Information block
@@ -76,17 +80,14 @@ def extract_fields_advanced(text):
         telephone = ""
         email = ""
 
-        # Extract email
         email_match = re.search(r"[\w\.-]+@[\w\.-]+", text)
         if email_match:
             email = email_match.group(0)
 
-        # Extract phone (basic pattern)
         phone_match = re.search(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b", text)
         if phone_match:
             telephone = phone_match.group(0)
 
-        # Remove email and phone from text to get name
         name = text
         if email:
             name = name.replace(email, "")
@@ -114,7 +115,6 @@ def extract_fields_advanced(text):
             if email:
                 result["Client Email"] = email
         elif field == "Scheduled time":
-            # Extract date and time if present in value
             date_match = re.search(r"\b\d{1,2}/\d{1,2}\b|\b\w{3}-\d{1,2}\b", value)
             time_match = re.search(r"\b\d{1,2}:\d{2}\s*(am|pm)?\b", value, re.I)
             if date_match:
@@ -123,13 +123,19 @@ def extract_fields_advanced(text):
                 result["Scheduled time"] = time_match.group(0)
             else:
                 result["Scheduled time"] = value.strip()
+        elif field in ["Property Information", "Address or Mixed"]:
+            # Try to extract Property Address if not already found
+            if "Property Address" not in result:
+                address_match = re.search(r"\d+\s+[A-Za-z0-9\s.,\-]+", value)
+                if address_match:
+                    result["Property Address"] = address_match.group(0).strip()
+            # Keep original field value as well
+            result[field] = value
         else:
-            # Remove repeated field name from value if present
             cleaned_value = re.sub(rf"^{re.escape(field)}[:\-]?\s*", "", value, flags=re.I).strip()
             if cleaned_value:
                 result[field] = cleaned_value
 
-    # Return as list of tuples for DataFrame
     return list(result.items())
 
 # Additional cleaning for slight fixes requested
@@ -153,9 +159,9 @@ def clean_extracted_data(extracted):
     return cleaned
 
 def main():
-    st.title("OCR PDF Field Extractor with Post-Processing")
+    st.title("OCR PDF Field Extractor with Property Address and Appraiser Extraction")
 
-    st.write("Upload an OCR-based PDF file. The app will perform OCR, extract fields, clean and parse them, then allow CSV download.")
+    st.write("Upload an OCR-based PDF file. The app will perform OCR, extract fields (including Property Address and Appraiser Fee), clean and parse them, then allow CSV download.")
 
     uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
@@ -168,6 +174,9 @@ def main():
         if not text.strip():
             st.error("No text found after OCR. Please check the PDF or try a different file.")
             return
+
+        # Debug: show OCR text to help tune extraction if needed
+        st.text_area("OCR Text (for debugging)", text, height=300)
 
         extracted = extract_fields_advanced(text)
         extracted_cleaned = clean_extracted_data(extracted)
