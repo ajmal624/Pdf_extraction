@@ -1,38 +1,7 @@
-import streamlit as st
-import pytesseract
-from pdf2image import convert_from_bytes
 import re
-import pandas as pd
-from io import StringIO
+from datetime import datetime
 
-def ocr_pdf(file_bytes):
-    try:
-        images = convert_from_bytes(file_bytes)
-    except Exception as e:
-        st.error(f"Error converting PDF to images: {e}")
-        return ""
-    text = ""
-    for img in images:
-        try:
-            text += pytesseract.image_to_string(img) + "\n"
-        except Exception as e:
-            st.error(f"Error during OCR: {e}")
-            return ""
-    return text
-
-def clean_text(text):
-    replacements = {
-        "â€™": "'",
-        "—": "-",
-        "“": '"',
-        "”": '"',
-        "|": " ",
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    return text
-
-def extract_fields_advanced(text):
+def extract_and_clean_fields(text):
     text = clean_text(text)
 
     fields = [
@@ -102,7 +71,11 @@ def extract_fields_advanced(text):
 
     property_info_text = ""
     address_or_mixed_text = ""
+    commercial_or_mixed_text = ""
+    reason_for_appraisal_text = ""
     appraiser_fee_text = ""
+    eta_text = ""
+    access_text = ""
 
     for field, value in combined:
         if field == "Client Information":
@@ -122,18 +95,31 @@ def extract_fields_advanced(text):
             if email:
                 result["Client Email"] = email
         elif field == "Scheduled time":
-            date_match = re.search(r"\b\d{1,2}/\d{1,2}\b|\b\w{3}-\d{1,2}\b", value)
+            # Extract time only
             time_match = re.search(r"\b\d{1,2}:\d{2}\s*(am|pm)?\b", value, re.I)
-            if date_match:
-                result["Scheduled date"] = date_match.group(0)
             if time_match:
                 result["Scheduled time"] = time_match.group(0)
             else:
                 result["Scheduled time"] = value.strip()
+        elif field == "Scheduled date":
+            # Try to parse and reformat date to "Jul-29"
+            try:
+                dt = datetime.strptime(value, "%m/%d/%y")
+                result["Scheduled date"] = dt.strftime("%b-%d")
+            except Exception:
+                result["Scheduled date"] = value.strip()
+        elif field == "ETA":
+            eta_text += " " + value
+        elif field == "Access":
+            access_text += " " + value
         elif field == "Property Information":
             property_info_text += " " + value
         elif field == "Address or Mixed":
             address_or_mixed_text += " " + value
+        elif field == "Commercial or Mixed":
+            commercial_or_mixed_text += " " + value
+        elif field == "Reason for appraisal":
+            reason_for_appraisal_text += " " + value
         elif field in ["Appraiser Fee", "Appraiser", "Fee"]:
             appraiser_fee_text += " " + value
         else:
@@ -141,79 +127,57 @@ def extract_fields_advanced(text):
             if cleaned_value:
                 result[field] = cleaned_value
 
+    # Combine and extract Property Address
     combined_property_text = (property_info_text + " " + address_or_mixed_text).strip()
     if combined_property_text:
-        address_match = re.search(r"\d+\s+[A-Za-z0-9\s.,\-]+", combined_property_text)
+        # Extract address pattern (number + street + city + state + zip)
+        address_match = re.search(r"\d+\s+[A-Za-z0-9\s.,\-]+(?:NY|New York|NY\s)?\s*\d{5}", combined_property_text)
+        if not address_match:
+            # fallback: extract number + street + city + state + zip loosely
+            address_match = re.search(r"\d+\s+[A-Za-z0-9\s.,\-]+", combined_property_text)
         if address_match:
             result["Property Address"] = address_match.group(0).strip()
-        result["Property Information"] = combined_property_text
 
+    # Commercial or Mixed
+    commercial_text = commercial_or_mixed_text.strip()
+    if not commercial_text and "Commercial or Mixed" not in result:
+        # Try to extract from property_info_text if it contains "Mixed"
+        if "mixed" in property_info_text.lower():
+            commercial_text = "Mixed"
+    if commercial_text:
+        result["Commercial or Mixed"] = commercial_text
+
+    # Reason for appraisal
+    if reason_for_appraisal_text:
+        # Clean quotes and dashes
+        reason_clean = reason_for_appraisal_text.replace('“', '"').replace('”', '"').replace('–', '-').strip()
+        result["Reason for appraisal"] = reason_clean
+
+    # Appraiser Fee
     if appraiser_fee_text.strip():
         result["Appraiser Fee"] = appraiser_fee_text.strip()
 
+    # ETA Standard
+    if eta_text.strip():
+        result["ETA Standard"] = eta_text.strip()
+
+    # Access
+    if access_text.strip():
+        access_val = access_text.strip()
+        if not access_val.lower().startswith("access to"):
+            access_val = "Access to " + access_val
+        result["Access"] = access_val
+
+    # Clean Name on report if exists
+    if "Name on report" in result:
+        result["Name on report"] = result["Name on report"].strip()
+
+    # Clean How did you hear about us
+    if "How did you hear about us" in result:
+        result["How did you hear about us"] = result["How did you hear about us"].lstrip("- ").strip()
+
+    # Clean Client Name (remove stray "Email" word)
+    if "Client Name" in result:
+        result["Client Name"] = re.sub(r"\bEmail\b", "", result["Client Name"], flags=re.I).strip()
+
     return list(result.items())
-
-def clean_extracted_data(extracted):
-    cleaned = []
-    for field, value in extracted:
-        if field == "How did you hear about us":
-            value = value.lstrip("- ").strip()
-
-        if field == "Client Name":
-            value = re.sub(r"\bEmail\b", "", value, flags=re.I).strip()
-
-        if field == "Access":
-            value = re.sub(r"^to\s+", "", value, flags=re.I).strip()
-
-        if field == "Name":
-            field = "Name on report"
-            value = value.lstrip("on report:").strip()
-
-        value = value.strip()
-
-        cleaned.append((field, value))
-    return cleaned
-
-def main():
-    st.title("OCR PDF Field Extractor with Debug")
-
-    uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
-
-    if uploaded_file is not None:
-        file_bytes = uploaded_file.read()
-
-        with st.spinner("Performing OCR on PDF pages..."):
-            text = ocr_pdf(file_bytes)
-
-        if not text.strip():
-            st.error("No text found after OCR. Please check the PDF or try a different file.")
-            return
-
-        # Show OCR text for debugging
-        st.text_area("OCR Text (debug)", text, height=300)
-
-        extracted = extract_fields_advanced(text)
-        extracted_cleaned = clean_extracted_data(extracted)
-
-        if not extracted_cleaned:
-            st.warning("No fields and values found with the current extraction pattern.")
-            return
-
-        df = pd.DataFrame(extracted_cleaned, columns=["Field", "Value"])
-
-        st.subheader("Extracted Fields and Values")
-        st.dataframe(df)
-
-        csv_buffer = StringIO()
-        df.to_csv(csv_buffer, index=False)
-        csv_data = csv_buffer.getvalue()
-
-        st.download_button(
-            label="Download extracted data as CSV",
-            data=csv_data,
-            file_name="extracted_fields.csv",
-            mime="text/csv"
-        )
-
-if __name__ == "__main__":
-    main()
