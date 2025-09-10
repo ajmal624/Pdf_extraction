@@ -5,9 +5,18 @@ import pandas as pd
 import pytesseract
 from io import BytesIO
 import re
+import cv2
+import numpy as np
+from PIL import Image
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App")
+
+# ----------- Preprocessing for better OCR -----------
+def preprocess_image(pil_img):
+    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
+    _, img = cv2.threshold(img, 150, 255, cv2.THRESH_BINARY)
+    return Image.fromarray(img)
 
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
@@ -69,33 +78,36 @@ if uploaded_file:
     with col2:
         if st.button("Table Extraction to CSV (OCR)"):
             uploaded_file.seek(0)
-            extracted_data = []
+            extracted_rows = []
 
             try:
                 pdf_images = convert_from_bytes(uploaded_file.read())
+                all_ocr_text = []
 
-                all_ocr_text = []  # For debugging
                 for i, page_img in enumerate(pdf_images):
-                    # OCR extract text from image
-                    text = pytesseract.image_to_string(page_img)
-                    all_ocr_text.append(f"--- Page {i+1} ---\n{text}")
-                    lines = [l.strip() for l in text.splitlines() if l.strip()]
+                    # Preprocess + OCR with structured output
+                    processed_img = preprocess_image(page_img)
+                    data = pytesseract.image_to_data(
+                        processed_img, output_type=pytesseract.Output.DATAFRAME, config="--psm 6"
+                    )
 
-                    for line in lines:
-                        # Try different splitting strategies
-                        if "\t" in line:
-                            columns = line.split("\t")
-                        else:
-                            columns = re.split(r"\s{2,}", line)
+                    # Drop empty rows
+                    data = data.dropna(subset=["text"])
+                    if data.empty:
+                        continue
 
-                        # Keep rows that look like a table (2+ columns)
-                        if len(columns) > 1:
-                            extracted_data.append([col.strip() for col in columns if col.strip()])
+                    all_ocr_text.append(f"--- Page {i+1} ---\n" + "\n".join(data["text"].tolist()))
 
-                if extracted_data:
-                    # First row = headers, rest = data rows
-                    headers = extracted_data[0]
-                    rows = extracted_data[1:]
+                    # Group by OCR 'line_num' to reconstruct rows
+                    for _, row_group in data.groupby("line_num"):
+                        row_text = [str(x).strip() for x in row_group["text"].tolist() if str(x).strip()]
+                        if len(row_text) > 1:  # only keep rows that look tabular
+                            extracted_rows.append(row_text)
+
+                if extracted_rows:
+                    # Assume first row = headers
+                    headers = extracted_rows[0]
+                    rows = extracted_rows[1:]
 
                     # Pad rows to match header length
                     max_len = len(headers)
@@ -118,7 +130,7 @@ if uploaded_file:
                 else:
                     st.warning("⚠️ OCR text extracted, but no table-like structure was detected.")
 
-                # Optional debug view
+                # Debugging option: show raw OCR text
                 if st.checkbox("🔍 Show raw OCR text"):
                     st.text("\n\n".join(all_ocr_text))
 
