@@ -1,14 +1,14 @@
 import streamlit as st
 import pytesseract
 import cv2
-import numpy as np
 import pandas as pd
 import tempfile
 from PIL import Image
+import re
 
-st.title("Extract Field Names from Document")
+st.title("Dynamic Field Extraction from Document")
 
-st.write("Upload an image and extract possible field names using OCR.")
+st.write("Upload an image and extract possible field names dynamically using OCR.")
 
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
@@ -18,15 +18,15 @@ if uploaded_file is not None:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Load the image
+    # Load image
     image = cv2.imread(file_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # OCR with detailed data
+    # Perform OCR
     custom_config = r'--oem 3 --psm 6'
     data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
 
-    # Filter out empty text and low-confidence results
+    # Filter out empty results and low confidence
     data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
 
@@ -35,43 +35,39 @@ if uploaded_file is not None:
 
     lines = []
     for (block, par, line), group in grouped:
-        line_text = ' '.join(group.text)
-        x = group.left.min()
-        y = group.top.min()
-        lines.append({'text': line_text, 'x': x, 'y': y})
+        line_text = ' '.join(group.text).strip()
+        lines.append(line_text)
 
-    # Sort lines by their y-coordinate
-    lines = sorted(lines, key=lambda x: x['y'])
+    # Heuristic to detect possible field names:
+    # - Lines that end with ":" or "-"
+    # - Lines that are short and may look like a label
+    # - Lines followed by another line that is more descriptive
 
-    st.subheader("Detected Lines")
-    for line in lines:
-        st.write(f"{line['y']}: {line['text']}")
+    possible_fields = set()
 
-    # Heuristic: Identify lines that are likely field names
-    # Criteria:
-    # 1. Lines ending with ':' or '?'
-    # 2. Lines with short length (e.g., <= 5 words)
-    # 3. Lines containing keywords like 'Name', 'Date', 'Address', etc.
-    #    (Optional – can be skipped if you want purely based on format)
+    for i, line in enumerate(lines):
+        # Check if line ends with ":" or "-"
+        if line.endswith(":") or line.endswith("-"):
+            possible_fields.add(line.rstrip(":-").strip())
+        # Check if line is short and next line looks like a value
+        elif len(line.split()) <= 5 and i + 1 < len(lines):
+            next_line = lines[i + 1]
+            if len(next_line.split()) > 2:
+                possible_fields.add(line.strip())
 
-    possible_field_names = []
-    for line in lines:
-        text = line['text'].strip()
-        if text.endswith(":") or text.endswith("?") or len(text.split()) <= 5:
-            possible_field_names.append(text)
+    # Display results
+    st.subheader("Detected Field Names")
+    if possible_fields:
+        df = pd.DataFrame(sorted(possible_fields), columns=["Field Name"])
+        st.dataframe(df)
 
-    # Remove duplicates and clean entries
-    possible_field_names = list(dict.fromkeys(possible_field_names))
-
-    st.subheader("Extracted Field Names")
-    df = pd.DataFrame(possible_field_names, columns=["Field Name"])
-    st.dataframe(df)
-
-    # CSV download
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Field Names as CSV",
-        data=csv,
-        file_name="field_names.csv",
-        mime="text/csv"
-    )
+        # CSV download button
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Field Names as CSV",
+            data=csv,
+            file_name="detected_field_names.csv",
+            mime="text/csv"
+        )
+    else:
+        st.write("No fields detected.")
