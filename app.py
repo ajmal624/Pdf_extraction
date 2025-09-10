@@ -1,3 +1,37 @@
+import streamlit as st
+import pytesseract
+from pdf2image import convert_from_bytes
+import re
+import pandas as pd
+from io import StringIO
+
+def ocr_pdf(file_bytes):
+    try:
+        images = convert_from_bytes(file_bytes)
+    except Exception as e:
+        st.error(f"Error converting PDF to images: {e}")
+        return ""
+    text = ""
+    for img in images:
+        try:
+            text += pytesseract.image_to_string(img) + "\n"
+        except Exception as e:
+            st.error(f"Error during OCR: {e}")
+            return ""
+    return text
+
+def clean_text(text):
+    replacements = {
+        "â€™": "'",
+        "—": "-",
+        "“": '"',
+        "”": '"',
+        "|": " ",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
 def extract_fields_advanced(text):
     text = clean_text(text)
 
@@ -66,7 +100,6 @@ def extract_fields_advanced(text):
 
         return name.strip(), telephone.strip(), email.strip()
 
-    # Temporary holders for merging
     property_info_text = ""
     address_or_mixed_text = ""
     appraiser_fee_text = ""
@@ -108,17 +141,13 @@ def extract_fields_advanced(text):
             if cleaned_value:
                 result[field] = cleaned_value
 
-    # Merge and clean Property Address and Commercial info
     combined_property_text = (property_info_text + " " + address_or_mixed_text).strip()
     if combined_property_text:
-        # Try to extract address from combined text
         address_match = re.search(r"\d+\s+[A-Za-z0-9\s.,\-]+", combined_property_text)
         if address_match:
             result["Property Address"] = address_match.group(0).strip()
-        # Also keep combined property info
         result["Property Information"] = combined_property_text
 
-    # Clean and assign Appraiser Fee
     if appraiser_fee_text.strip():
         result["Appraiser Fee"] = appraiser_fee_text.strip()
 
@@ -140,8 +169,51 @@ def clean_extracted_data(extracted):
             field = "Name on report"
             value = value.lstrip("on report:").strip()
 
-        # Trim extra spaces
         value = value.strip()
 
         cleaned.append((field, value))
     return cleaned
+
+def main():
+    st.title("OCR PDF Field Extractor with Debug")
+
+    uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+
+    if uploaded_file is not None:
+        file_bytes = uploaded_file.read()
+
+        with st.spinner("Performing OCR on PDF pages..."):
+            text = ocr_pdf(file_bytes)
+
+        if not text.strip():
+            st.error("No text found after OCR. Please check the PDF or try a different file.")
+            return
+
+        # Show OCR text for debugging
+        st.text_area("OCR Text (debug)", text, height=300)
+
+        extracted = extract_fields_advanced(text)
+        extracted_cleaned = clean_extracted_data(extracted)
+
+        if not extracted_cleaned:
+            st.warning("No fields and values found with the current extraction pattern.")
+            return
+
+        df = pd.DataFrame(extracted_cleaned, columns=["Field", "Value"])
+
+        st.subheader("Extracted Fields and Values")
+        st.dataframe(df)
+
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        csv_data = csv_buffer.getvalue()
+
+        st.download_button(
+            label="Download extracted data as CSV",
+            data=csv_data,
+            file_name="extracted_fields.csv",
+            mime="text/csv"
+        )
+
+if __name__ == "__main__":
+    main()
