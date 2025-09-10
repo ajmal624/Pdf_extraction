@@ -3,119 +3,144 @@ import pytesseract
 import cv2
 import numpy as np
 import pandas as pd
-import re  # ✅ Import for regular expressions
 import tempfile
 from PIL import Image
 
 # Optional: Set this if Tesseract is not in PATH
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-st.title("Document Data Extraction App")
+st.title("Document Data Extraction with Coordinates")
 
-st.write("Upload an image file of your form and extract the key fields as a CSV.")
+st.write("Upload an image and extract fields using OCR with position filtering.")
 
-# Upload file
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Save file temporarily
+    # Save the uploaded image temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Read image using OpenCV
+    # Load the image
     image = cv2.imread(file_path)
-
-    # Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Apply thresholding to improve OCR
-    processed = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    )
+    # OCR with detailed data
+    custom_config = r'--oem 3 --psm 6'
+    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
 
-    # OCR with pytesseract
-    text = pytesseract.image_to_string(processed)
+    # Remove empty text entries and low confidence results
+    data = data[data.conf != -1]
+    data = data.dropna(subset=['text'])
 
-    st.subheader("Extracted Text")
-    st.text_area("OCR Output", text, height=300)
+    # Group by line number
+    grouped = data.groupby(['block_num', 'par_num', 'line_num'])
 
-    # Parse fields using regex
+    lines = []
+    for (block, par, line), group in grouped:
+        line_text = ' '.join(group.text)
+        x = group.left.min()
+        y = group.top.min()
+        lines.append({'text': line_text, 'x': x, 'y': y})
+
+    # Sort lines by their y-coordinate (top to bottom)
+    lines = sorted(lines, key=lambda x: x['y'])
+
+    st.subheader("Detected Lines")
+    for line in lines:
+        st.write(f"{line['y']}: {line['text']}")
+
+    # Extract fields based on keywords and proximity
     fields = {}
 
+    # Create a simple function to find line by keyword
+    def find_line(keyword):
+        for line in lines:
+            if keyword.lower() in line['text'].lower():
+                return line['text']
+        return None
+
     # Date
-    date_match = st.text_input("Enter date pattern if needed", r"Date[:\s]*(\d{1,2}/\d{1,2}/\d{2,4})")
-    match = re.search(date_match, text)
-    if match:
-        fields["Date"] = match.group(1)
+    date_line = find_line("Date")
+    if date_line:
+        fields["Date"] = date_line.split("Date")[-1].strip(" :")
 
     # Client Email
-    match = re.search(r'[\w\.-]+@[\w\.-]+', text)
-    if match:
-        fields["Client Email"] = match.group(0)
+    email_line = None
+    for line in lines:
+        if "@" in line['text']:
+            email_line = line['text']
+            break
+    if email_line:
+        fields["Client Email"] = email_line.strip()
 
-    # Telephone
-    match = re.search(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', text)
-    if match:
-        fields["Client Telephone"] = match.group(0)
+    # Client Telephone
+    phone_line = None
+    import re
+    phone_pattern = re.compile(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}')
+    for line in lines:
+        if phone_pattern.search(line['text']):
+            phone_line = line['text']
+            break
+    if phone_line:
+        fields["Client Telephone"] = phone_pattern.search(phone_line).group()
 
-    # Name
-    name_match = re.search(r'Name[:\s]*(.*)', text)
-    if name_match:
-        fields["Client Name"] = name_match.group(1).strip()
+    # Client Name
+    name_line = find_line("Name")
+    if name_line:
+        fields["Client Name"] = name_line.split("Name")[-1].strip(" :")
 
-    # Address
-    address_match = re.search(r'Address[:\s]*(.*)', text)
-    if address_match:
-        fields["Property Address"] = address_match.group(1).strip()
+    # Property Address
+    address_line = find_line("Address")
+    if address_line:
+        fields["Property Address"] = address_line.split("Address")[-1].strip(" :")
 
     # Commercial or Mixed
-    comm_match = re.search(r'Commercial or Mixed[:\s]*(.*)', text)
-    if comm_match:
-        fields["Commercial or Mixed"] = comm_match.group(1).strip()
+    comm_line = find_line("Commercial or Mixed")
+    if comm_line:
+        fields["Commercial or Mixed"] = comm_line.split("Commercial or Mixed")[-1].strip(" :")
 
     # Reason for appraisal
-    reason_match = re.search(r'Reason for appraisal\?[:\s]*(.*)', text, re.DOTALL)
-    if reason_match:
-        fields["Reason for appraisal"] = reason_match.group(1).strip()
+    reason_line = find_line("Reason for appraisal")
+    if reason_line:
+        fields["Reason for appraisal"] = reason_line.split("Reason for appraisal")[-1].strip(" :")
 
     # Appraiser Fee
-    fee_match = re.search(r'Appraiser Fee[:\s]*(.*)', text)
-    if fee_match:
-        fields["Appraiser Fee"] = fee_match.group(1).strip()
+    fee_line = find_line("Appraiser Fee")
+    if fee_line:
+        fields["Appraiser Fee"] = fee_line.split("Appraiser Fee")[-1].strip(" :")
 
     # Scheduled Date
-    sched_date_match = re.search(r'Scheduled date[:\s]*(.*)', text)
-    if sched_date_match:
-        fields["Scheduled date"] = sched_date_match.group(1).strip()
+    sched_date_line = find_line("Scheduled date")
+    if sched_date_line:
+        fields["Scheduled date"] = sched_date_line.split("Scheduled date")[-1].strip(" :")
 
     # Scheduled Time
-    sched_time_match = re.search(r'Scheduled time[:\s]*(.*)', text)
-    if sched_time_match:
-        fields["Scheduled time"] = sched_time_match.group(1).strip()
+    sched_time_line = find_line("Scheduled time")
+    if sched_time_line:
+        fields["Scheduled time"] = sched_time_line.split("Scheduled time")[-1].strip(" :")
 
     # ETA Standard
-    eta_match = re.search(r'ETA Standard is (.*)', text)
-    if eta_match:
-        fields["ETA Standard"] = eta_match.group(1).strip()
+    eta_line = find_line("ETA Standard")
+    if eta_line:
+        fields["ETA Standard"] = eta_line.split("ETA Standard")[-1].strip(" :")
 
     # Access
-    access_match = re.search(r'Access to (.*)', text)
-    if access_match:
-        fields["Access"] = "Access to " + access_match.group(1).strip()
+    access_line = find_line("Access")
+    if access_line:
+        fields["Access"] = access_line.split("Access")[-1].strip(" :")
 
     # Name on Report
-    report_match = re.search(r'Name on report[:\s]*(.*)', text, re.DOTALL)
-    if report_match:
-        fields["Name on report"] = report_match.group(1).strip()
+    report_line = find_line("Name on report")
+    if report_line:
+        fields["Name on report"] = report_line.split("Name on report")[-1].strip(" :")
 
-    # Create DataFrame
-    df = pd.DataFrame(list(fields.items()), columns=["Field", "Value"])
-
+    # Display fields
     st.subheader("Extracted Fields")
+    df = pd.DataFrame(list(fields.items()), columns=["Field", "Value"])
     st.dataframe(df)
 
-    # CSV download button
+    # CSV download
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download CSV",
