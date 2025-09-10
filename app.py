@@ -1,4 +1,3 @@
-```
 import streamlit as st
 import pytesseract
 from pdf2image import convert_from_bytes
@@ -45,8 +44,6 @@ def split_line_to_pairs(line):
     return pairs
 
 def extract_address(text):
-    # Simple regex to extract US-style address (street, city, state, zip)
-    # This can be improved based on your data
     address_pattern = re.compile(
         r'(\d{1,5}\s[\w\s\.,\-]+,\s*[\w\s]+,\s*[A-Z]{2}\s*\d{5}(-\d{4})?)',
         re.IGNORECASE
@@ -121,10 +118,8 @@ def extract_fields_dynamic(text):
 
     save_current()
 
-    # Convert to dict for easier manipulation
     result = {k: v for k, v in extracted}
 
-    # Extract Address from Reason for appraisal or Property Information if not explicitly present
     if "Address" not in result or not result["Address"]:
         for key in ["Reason for appraisal", "Property Information", "Address or Mixed"]:
             if key in result:
@@ -133,13 +128,10 @@ def extract_fields_dynamic(text):
                     result["Address"] = addr
                     break
 
-    # If Appraiser or Appraiser Fee missing, try to find in Appraisal Information
     if ("Appraiser" not in result or not result["Appraiser"]) and "Appraisal Information" in result:
-        # Try to extract fee or name from text
         fee_match = re.search(r"\$\d+(?:,\d{3})*(?:\.\d{2})?", result["Appraisal Information"])
         if fee_match:
             result["Appraiser Fee"] = fee_match.group(0)
-        # You can add more extraction logic here if needed
 
     return list(result.items())
 
@@ -184,4 +176,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
