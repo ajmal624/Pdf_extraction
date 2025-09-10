@@ -13,24 +13,24 @@ def ocr_pdf(file_bytes):
     return text
 
 def clean_text(text):
-    # Fix common OCR artifacts
     replacements = {
         "â€™": "'",
         "—": "-",
         "“": '"',
         "”": '"',
-        "|": " ",  # Replace pipe with space
+        "|": " ",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
     return text
 
 def extract_fields_advanced(text):
-    # List of known fields in order of appearance
+    text = clean_text(text)
+
+    # Split by known fields (same as before)
     fields = [
         "How did you hear about us",
         "Date",
-        "Client Name",
         "Client Information",
         "Name",
         "Telephone",
@@ -49,20 +49,10 @@ def extract_fields_advanced(text):
         "Name on report"
     ]
 
-    # Clean text first
-    text = clean_text(text)
-
-    # Build regex pattern to split text by fields (using lookahead)
-    # Escape field names for regex
     escaped_fields = [re.escape(f) for f in fields]
     pattern = r"(?=(" + "|".join(escaped_fields) + r"))"
-
-    # Split text by field names, keep the field names in the results
     parts = re.split(pattern, text)
 
-    # parts will be like ['', 'Date', '7/23/25 Client Information Name Telephone Email Bruce Davidson ...', 'Name on report', 'The Village of Liberty...']
-
-    # Combine field names with their content
     combined = []
     i = 1
     while i < len(parts):
@@ -74,17 +64,80 @@ def extract_fields_advanced(text):
         combined.append((field_name, value))
         i += 2
 
-    # Post-process combined to merge related fields if needed
-    # For example, "Client Information" contains Name, Telephone, Email in one block
-    # You can parse those subfields here if needed
+    # Post-processing to merge and clean fields
+    result = {}
 
-    # For simplicity, return combined as is
-    return combined
+    # Helper to extract subfields from Client Information block
+    def parse_client_info(text):
+        # Try to extract Name, Telephone, Email from one string
+        name = ""
+        telephone = ""
+        email = ""
+
+        # Simple regex for email
+        email_match = re.search(r"[\w\.-]+@[\w\.-]+", text)
+        if email_match:
+            email = email_match.group(0)
+
+        # Simple regex for phone (basic)
+        phone_match = re.search(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b", text)
+        if phone_match:
+            telephone = phone_match.group(0)
+
+        # Remove email and phone from text to get name
+        name = text
+        if email:
+            name = name.replace(email, "")
+        if telephone:
+            name = name.replace(telephone, "")
+        name = name.strip(" |,-")
+
+        return name.strip(), telephone.strip(), email.strip()
+
+    for field, value in combined:
+        if field == "Client Information":
+            # Parse subfields from this block
+            name, telephone, email = parse_client_info(value)
+            if name:
+                result["Client Name"] = name
+            if telephone:
+                result["Client Telephone"] = telephone
+            if email:
+                result["Client Email"] = email
+        elif field == "Email":
+            # Sometimes Email line contains name and phone too
+            name, telephone, email = parse_client_info(value)
+            if name:
+                result["Client Name"] = name
+            if telephone:
+                result["Client Telephone"] = telephone
+            if email:
+                result["Client Email"] = email
+        elif field == "Scheduled time":
+            # Sometimes scheduled time line contains date and time
+            # Extract date and time if present
+            date_match = re.search(r"\b\d{1,2}/\d{1,2}\b|\b\w{3}-\d{1,2}\b", value)
+            time_match = re.search(r"\b\d{1,2}:\d{2}\s*(am|pm)?\b", value, re.I)
+            if date_match:
+                result["Scheduled date"] = date_match.group(0)
+            if time_match:
+                result["Scheduled time"] = time_match.group(0)
+            else:
+                result["Scheduled time"] = value.strip()
+        else:
+            # Normal assignment
+            # Remove field name from value if repeated (e.g. "Date:7/23/25")
+            cleaned_value = re.sub(rf"^{re.escape(field)}[:\-]?\s*", "", value, flags=re.I).strip()
+            if cleaned_value:
+                result[field] = cleaned_value
+
+    # Return as list of tuples for DataFrame
+    return list(result.items())
 
 def main():
-    st.title("OCR PDF Field Extractor with Advanced Parsing")
+    st.title("OCR PDF Field Extractor with Post-Processing")
 
-    st.write("Upload an OCR-based PDF file. The app will perform OCR, then extract fields and values using advanced parsing.")
+    st.write("Upload an OCR-based PDF file. The app will perform OCR, extract fields, clean and parse them, then allow CSV download.")
 
     uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
@@ -104,13 +157,11 @@ def main():
             st.warning("No fields and values found with the current extraction pattern.")
             return
 
-        # Convert to DataFrame
         df = pd.DataFrame(extracted, columns=["Field", "Value"])
 
         st.subheader("Extracted Fields and Values")
         st.dataframe(df)
 
-        # CSV download
         csv_buffer = StringIO()
         df.to_csv(csv_buffer, index=False)
         csv_data = csv_buffer.getvalue()
