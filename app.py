@@ -3,9 +3,9 @@ import pandas as pd
 from docx import Document
 import io
 
-def extract_docx_smart(file):
+def extract_docx_as_columns(file):
     doc = Document(file)
-    data = []
+    data = {}
 
     # Extract data from tables
     for table in doc.tables:
@@ -14,8 +14,8 @@ def extract_docx_smart(file):
             if len(cells) >= 2:
                 field = cells[0].strip()
                 value = cells[1].strip()
-                if field and value:  # Ignore empty fields
-                    data.append((field, value))
+                if field and value:
+                    data[field] = value
 
     # Extract data from paragraphs
     for para in doc.paragraphs:
@@ -24,30 +24,23 @@ def extract_docx_smart(file):
             parts = line.split(":", 1)
             field, value = parts[0].strip(), parts[1].strip()
             if field and value:
-                data.append((field, value))
+                data[field] = value
 
-    # Create DataFrame
-    df = pd.DataFrame(data, columns=["Field", "Value"])
-
-    # Remove rows with 'Unlabeled' or empty fields
-    df = df[~df["Field"].str.contains("Unlabeled", case=False, na=False)]
-    df = df[df["Field"].str.strip() != ""]
-
-    # Pivot to make fields as columns
-    df = df.set_index("Field").T.reset_index(drop=True)
+    # Convert to DataFrame with one row
+    df = pd.DataFrame([data])
     return df
 
 # ---------- Streamlit App ----------
-st.title("Clean DOCX to CSV Extractor")
+st.title("DOCX to CSV (Fields as Columns)")
 
 uploaded_file = st.file_uploader("Upload a DOCX file", type=["docx"])
 
 if uploaded_file:
-    df = extract_docx_smart(uploaded_file)
-    st.subheader("Extracted Data (One Row per Document)")
+    df = extract_docx_as_columns(uploaded_file)
+    st.subheader("Extracted Data (Fields as Columns)")
     st.dataframe(df)
 
-    # Save CSV
+    # Save as CSV
     csv_buffer = io.BytesIO()
     df.to_csv(csv_buffer, index=False)
     csv_buffer.seek(0)
