@@ -1,111 +1,114 @@
 import streamlit as st
 import pdfplumber
-import pandas as pd
 from pdf2image import convert_from_bytes
+import pandas as pd
 import pytesseract
-from PIL import Image
-import re
+from io import BytesIO
 
-st.set_page_config(page_title="PDF Extractor App", layout="wide")
-st.title("📄 PDF Extractor with OCR Table Support")
+st.set_page_config(page_title="PDF Field Extractor", layout="wide")
+st.title("📄 PDF Field Extractor App")
 
-uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file:
-    st.subheader("📄 Uploaded PDF Preview")
-    st.write(f"Filename: {uploaded_file.name}")
-    st.write(f"File size: {uploaded_file.size / 1024:.2f} KB")
+    st.subheader("📖 PDF Preview")
+    try:
+        uploaded_file.seek(0)
+        pages = convert_from_bytes(uploaded_file.read())
+        for i, page in enumerate(pages):
+            st.image(page, caption=f"Page {i+1}", use_column_width=True)
+    except Exception as e:
+        st.error(f"Failed to render PDF: {e}")
 
-    # ----------------------- Direct PDF Extraction -----------------------
-    if st.button("Direct PDF Extraction"):
-        pdf_text = ""
-        with pdfplumber.open(uploaded_file) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    pdf_text += text + "\n"
+    st.write("---")
+    st.subheader("⚡ Extraction Options")
 
-        pdf_data = {}
-        for line in pdf_text.splitlines():
-            line = line.strip()
-            if ":" not in line:
-                continue  # Only split on lines with colon
+    col1, col2 = st.columns(2)
 
-            # Special case: File ID + Due Date in one line
-            if "Due Date:" in line and "File ID" in line:
-                parts = line.split("Due Date:")
-                pdf_data["File ID"] = parts[0].replace("File ID", "").strip()
-                pdf_data["Due Date"] = parts[1].strip()
-                continue
+    # -------------------- Direct PDF Extraction to CSV --------------------
+    with col1:
+        if st.button("Direct PDF Extraction to CSV"):
+            uploaded_file.seek(0)
+            pdf_text = ""
+            try:
+                with pdfplumber.open(uploaded_file) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text()
+                        if text:
+                            pdf_text += text + "\n"
+            except Exception as e:
+                st.error(f"Error reading PDF: {e}")
+                pdf_text = ""
 
-            field, value = line.split(":", 1)
-            field = field.strip()
-            value = value.strip()
-            if field and value:
-                pdf_data[field] = value
+            if pdf_text.strip():
+                pdf_data = {}
+                for line in pdf_text.splitlines():
+                    line = line.strip()
+                    if ":" not in line:
+                        continue
+                    field, value = line.split(":", 1)
+                    pdf_data[field.strip()] = value.strip()
 
-        pdf_data["Filename"] = uploaded_file.name
-        df_direct = pd.DataFrame([pdf_data])
-        df_direct = df_direct.dropna(axis=1, how="all")
+                if pdf_data:
+                    df = pd.DataFrame([pdf_data])
+                    st.success("✅ CSV ready for download!")
+                    st.dataframe(df)
 
-        st.subheader("✅ Direct PDF Extraction Result")
-        st.dataframe(df_direct)
+                    csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8")
+                    st.download_button(
+                        "📥 Download CSV",
+                        data=csv_bytes,
+                        file_name="direct_pdf_extraction.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.warning("⚠️ No data extracted from this PDF.")
 
-        csv_direct = df_direct.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            label="📥 Download CSV (Direct Extraction)",
-            data=csv_direct,
-            file_name="direct_extracted_data.csv",
-            mime="text/csv"
-        )
+    # -------------------- OCR Extraction to CSV --------------------
+    with col2:
+        if st.button("Table Extraction to CSV (OCR)"):
+            uploaded_file.seek(0)
+            extracted_data = []
 
-    # ----------------------- OCR Table Extraction -----------------------
-    if st.button("OCR Table Extraction to CSV"):
-        st.info("🔍 Performing OCR Table extraction... This may take a few seconds.")
+            try:
+                # Convert PDF pages into images
+                pdf_images = convert_from_bytes(uploaded_file.read())
 
-        try:
-            pages = convert_from_bytes(uploaded_file.read())
-        except Exception as e:
-            st.error(f"❌ PDF to image conversion failed: {e}")
-            pages = []
+                for i, page_img in enumerate(pdf_images):
+                    text = pytesseract.image_to_string(page_img)
+                    lines = text.splitlines()
+                    page_dict = {}
+                    current_field = None
 
-        if pages:
-            all_rows = []
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
 
-            for i, page in enumerate(pages):
-                st.image(page, caption=f"Page {i+1}", use_column_width=True)
+                        # Heuristic: short lines without digits = potential field name
+                        if len(line.split()) <= 5 and not any(c.isdigit() for c in line):
+                            current_field = line
+                            page_dict[current_field] = ""
+                        elif current_field:
+                            page_dict[current_field] += (" " + line if page_dict[current_field] else line)
 
-                gray_image = page.convert("L")
-                # OCR using pytesseract with PSM 6 (assume uniform block of text)
-                text = pytesseract.image_to_string(gray_image, config="--psm 6")
-                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                    if page_dict:
+                        extracted_data.append(page_dict)
 
-                if len(lines) < 2:
-                    continue  # Skip pages without table-like content
+                if extracted_data:
+                    df = pd.DataFrame(extracted_data)
+                    st.success("✅ Table data extracted with OCR!")
+                    st.dataframe(df)
 
-                # Assume first line = headers
-                headers = re.split(r'\s{2,}', lines[0])
-                for line in lines[1:]:
-                    values = re.split(r'\s{2,}', line)
-                    row = {}
-                    for idx, header in enumerate(headers):
-                        row[header] = values[idx] if idx < len(values) else ""
-                    all_rows.append(row)
-
-            if all_rows:
-                df_ocr = pd.DataFrame(all_rows)
-                df_ocr["Filename"] = uploaded_file.name
-                df_ocr = df_ocr.dropna(axis=1, how="all")
-
-                st.subheader("✅ OCR Table Extraction Result")
-                st.dataframe(df_ocr)
-
-                csv_ocr = df_ocr.to_csv(index=False, encoding="utf-8-sig")
-                st.download_button(
-                    label="📥 Download CSV (OCR Table Extraction)",
-                    data=csv_ocr,
-                    file_name="ocr_table_extracted_data.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.warning("⚠️ No table-like content detected in OCR output. Try enhancing PDF quality or using higher-res scans.")
+                    csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8")
+                    st.download_button(
+                        "📥 Download CSV",
+                        data=csv_bytes,
+                        file_name="table_pdf_extraction.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.warning("⚠️ No table data could be extracted from this PDF.")
+            
+            except Exception as e:
+                st.error(f"OCR extraction failed: {e}")
