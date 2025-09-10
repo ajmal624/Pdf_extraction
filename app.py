@@ -6,81 +6,72 @@ import pandas as pd
 import tempfile
 from PIL import Image
 
-st.title("Document Field Extraction")
+st.title("Extract Field Names from Document")
 
-# Upload image
-uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+st.write("Upload an image and extract possible field names using OCR.")
+
+uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Save image temporarily
+    # Save the uploaded image temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Load image
+    # Load the image
     image = cv2.imread(file_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # OCR extraction with data
+    # OCR with detailed data
     custom_config = r'--oem 3 --psm 6'
     data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
 
-    # Filter out empty text
+    # Filter out empty text and low-confidence results
     data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
-    data = data.sort_values(by=['top', 'left']).reset_index(drop=True)
 
-    # Merge nearby words into lines
+    # Group by line number
+    grouped = data.groupby(['block_num', 'par_num', 'line_num'])
+
     lines = []
-    current_line = []
-    last_top = None
-    for _, row in data.iterrows():
-        if last_top is None or abs(row['top'] - last_top) < 10:
-            current_line.append(row['text'])
-        else:
-            lines.append(" ".join(current_line))
-            current_line = [row['text']]
-        last_top = row['top']
-    if current_line:
-        lines.append(" ".join(current_line))
+    for (block, par, line), group in grouped:
+        line_text = ' '.join(group.text)
+        x = group.left.min()
+        y = group.top.min()
+        lines.append({'text': line_text, 'x': x, 'y': y})
 
-    # Heuristic grouping into fields and values
-    fields = []
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        
-        # Treat lines ending with ':' or '?' or very short lines as field names
-        if line.endswith(":") or line.endswith("?") or len(line.split()) <= 3:
-            field_name = line.rstrip(":?")
-            # Find next non-empty line as value
-            value_lines = []
-            j = i + 1
-            while j < len(lines) and lines[j].strip() != "":
-                value_lines.append(lines[j].strip())
-                j += 1
-            value = " ".join(value_lines)
-            fields.append((field_name, value))
-            i = j
-        else:
-            # If not clearly a field name, check if next line is longer and treat it as value
-            if i + 1 < len(lines) and len(lines[i + 1].strip().split()) > len(line.split()):
-                field_name = line
-                value = lines[i + 1].strip()
-                fields.append((field_name, value))
-                i += 2
-            else:
-                i += 1
+    # Sort lines by their y-coordinate
+    lines = sorted(lines, key=lambda x: x['y'])
 
-    # Display and download CSV
-    df = pd.DataFrame(fields, columns=["Field", "Value"])
-    st.subheader("Extracted Fields and Values")
+    st.subheader("Detected Lines")
+    for line in lines:
+        st.write(f"{line['y']}: {line['text']}")
+
+    # Heuristic: Identify lines that are likely field names
+    # Criteria:
+    # 1. Lines ending with ':' or '?'
+    # 2. Lines with short length (e.g., <= 5 words)
+    # 3. Lines containing keywords like 'Name', 'Date', 'Address', etc.
+    #    (Optional – can be skipped if you want purely based on format)
+
+    possible_field_names = []
+    for line in lines:
+        text = line['text'].strip()
+        if text.endswith(":") or text.endswith("?") or len(text.split()) <= 5:
+            possible_field_names.append(text)
+
+    # Remove duplicates and clean entries
+    possible_field_names = list(dict.fromkeys(possible_field_names))
+
+    st.subheader("Extracted Field Names")
+    df = pd.DataFrame(possible_field_names, columns=["Field Name"])
     st.dataframe(df)
 
+    # CSV download
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="Download CSV",
+        label="Download Field Names as CSV",
         data=csv,
-        file_name="extracted_fields.csv",
+        file_name="field_names.csv",
         mime="text/csv"
     )
