@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image
+import re
 
 st.title("Field Name Extraction from Image")
 
@@ -23,7 +24,7 @@ if uploaded_file is not None:
     data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
 
-    # Group lines
+    # Group by lines
     grouped = data.groupby(['block_num', 'par_num', 'line_num'])
     lines = []
     for (_, _, _), group in grouped:
@@ -31,35 +32,48 @@ if uploaded_file is not None:
         if line_text:
             lines.append(line_text)
 
-    # Heuristic filtering
-    keywords = ["Information", "Address", "Commercial", "Appraisal", "Fee", "Schedule", "Access", "Name", "Date", "Telephone", "Email"]
+    # Known keywords to include lines
+    keywords = ["Information", "Address", "Commercial", "Appraisal", "Fee", "Schedule", "Access", "Name", "Date", "Telephone", "Email", "Reason"]
+
     field_names = []
     for line in lines:
+        original_line = line
+        line = line.strip()
+        
+        # Normalize line by removing trailing values after colon
+        if ':' in line:
+            line = line.split(':')[0].strip()
+        
+        # Word count, numbers, and punctuation heuristics
         words = line.split()
         num_words = len(words)
         has_numbers = any(char.isdigit() for char in line)
         punctuation_count = sum(1 for char in line if char in [":", "|", "-", "—", ".", ","])
-        
-        # Include if line is short OR has known keywords
-        if (num_words <= 8 and not has_numbers and punctuation_count <= 2) or any(kw.lower() in line.lower() for kw in keywords):
-            field_names.append(line)
 
-    # Remove duplicates and empty lines
+        # Conditions to keep the line
+        is_short = num_words <= 6
+        has_keyword = any(kw.lower() in line.lower() for kw in keywords)
+
+        if is_short or has_keyword:
+            if not has_numbers or has_keyword:
+                field_names.append(line)
+
+    # Remove duplicates and sort
     seen = set()
-    filtered_fields = []
+    final_fields = []
     for name in field_names:
         name = name.strip()
         if name and name not in seen:
             seen.add(name)
-            filtered_fields.append(name)
+            final_fields.append(name)
 
     # Display extracted field names
     st.subheader("Extracted Field Names")
-    for name in filtered_fields:
+    for name in final_fields:
         st.write(name)
 
     # Prepare CSV for download
-    df = pd.DataFrame(filtered_fields, columns=["Field Name"])
+    df = pd.DataFrame(final_fields, columns=["Field Name"])
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download CSV",
