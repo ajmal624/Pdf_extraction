@@ -13,17 +13,17 @@ def ocr_pdf(file_bytes):
         text += pytesseract.image_to_string(img) + "\n"
     return text
 
-# Extract fields and values using regex
+# Extract fields and values using regex, return list of tuples
 def extract_fields(text):
-    pattern = re.compile(r"(?P<field>[A-Za-z0-9 _-]+)\s*[:\-]\s*(?P<value>.+)")
-    fields = {}
+    pattern = re.compile(r"(?P<field>[A-Za-z0-9 _\-\&\.\']+)\s*[:\-]\s*(?P<value>.+)")
+    extracted = []
     for line in text.splitlines():
         match = pattern.match(line)
         if match:
             field = match.group("field").strip()
             value = match.group("value").strip()
-            fields[field] = value
-    return fields
+            extracted.append((field, value))
+    return extracted
 
 def main():
     st.title("OCR PDF Field Extractor and CSV Exporter")
@@ -42,17 +42,20 @@ def main():
             st.error("No text found after OCR. Please check the PDF or try a different file.")
             return
 
-        fields = extract_fields(text)
+        extracted = extract_fields(text)
 
-        if not fields:
+        if not extracted:
             st.warning("No fields and values found with the current extraction pattern.")
             st.info("You may need to adjust the regex pattern in the code to match your PDF format.")
             return
 
+        # Convert list of tuples to DataFrame with two columns: Field and Value
+        df = pd.DataFrame(extracted, columns=["Field", "Value"])
+
         st.subheader("Extracted Fields and Values")
-        df = pd.DataFrame([fields])
         st.dataframe(df)
 
+        # Convert dataframe to CSV
         csv_buffer = StringIO()
         df.to_csv(csv_buffer, index=False)
         csv_data = csv_buffer.getvalue()
