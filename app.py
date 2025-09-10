@@ -3,49 +3,54 @@ import pytesseract
 import cv2
 import numpy as np
 import pandas as pd
-import tempfile
 from PIL import Image
+import tempfile
 
-# Optional: Set tesseract path if needed
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Streamlit app title
+st.title("Dynamic Field Name Extractor")
 
-st.title("Field Name Extractor from Document")
-
-# Upload file
-uploaded_file = st.file_uploader("Upload an image file", type=["jpg", "jpeg", "png"])
+# File uploader
+uploaded_file = st.file_uploader("Upload document image", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
-    # Save to temporary file
+    # Save uploaded image to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Load image
+    # Read and preprocess image
     image = cv2.imread(file_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    processed = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    processed = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
 
-    # OCR extraction
+    # OCR extraction using pytesseract
     custom_config = r'--oem 3 --psm 6'
-    data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
+    ocr_data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
 
-    # Filter out empty text
-    data = data[data.text.notnull() & (data.text.str.strip() != '')]
+    # Filter out low confidence and empty text
+    ocr_data = ocr_data[ocr_data.conf != -1]
+    ocr_data = ocr_data[ocr_data.text.notnull() & (ocr_data.text.str.strip() != '')]
+    ocr_data = ocr_data[ocr_data.conf > 50]
 
-    # Heuristic: Take texts with confidence > 50 and group by line number
+    # Group by line number to form text blocks
     fields = []
-    grouped = data.groupby('line_num')
+    grouped = ocr_data.groupby(['block_num', 'par_num', 'line_num'])
 
     for _, group in grouped:
-        text_line = " ".join(group['text'].tolist())
-        fields.append(text_line.strip())
+        text_line = " ".join(group.text.tolist())
+        text_line = text_line.strip()
+        if text_line:
+            fields.append(text_line)
 
-    # Store field names
-    df = pd.DataFrame(fields, columns=["Field Name"])
+    # Create DataFrame for field names
+    df_fields = pd.DataFrame(fields, columns=["Field Name"])
 
+    # Show extracted field names
     st.subheader("Detected Field Names")
-    st.dataframe(df)
+    st.dataframe(df_fields)
 
-    # Download CSV
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("Download CSV", data=csv, file_name="fields.csv", mime="text/csv")
+    # Download as CSV
+    csv_data = df_fields.to_csv(index=False).encode('utf-8')
+    st.download_button("Download CSV", data=csv_data, file_name="fields.csv", mime="text/csv")
