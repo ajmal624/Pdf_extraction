@@ -4,113 +4,87 @@ import cv2
 import numpy as np
 import pandas as pd
 import tempfile
-import re
 from PIL import Image
-
-# Optional: Set this if Tesseract is not in PATH
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 st.title("Dynamic Document Data Extraction")
 
-uploaded_file = st.file_uploader("Upload a document image", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Save uploaded file temporarily
+    # Save image temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Read image
+    # Load and process image
     image = cv2.imread(file_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # OCR with detailed data
+    # OCR extraction
     custom_config = r'--oem 3 --psm 6'
     data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
+
+    # Filter out empty entries
     data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
 
-    # Group lines by block and paragraph
-    grouped = data.groupby(['block_num', 'par_num', 'line_num'])
+    # Sort by top coordinate then left coordinate
+    data = data.sort_values(by=['top', 'left']).reset_index(drop=True)
 
+    # Extract fields by proximity
     lines = []
-    for _, group in grouped:
-        text = ' '.join(group.text)
-        x = group.left.min()
-        y = group.top.min()
-        lines.append({'text': text.strip(), 'x': x, 'y': y})
+    for _, row in data.iterrows():
+        lines.append({
+            'text': row['text'],
+            'left': row['left'],
+            'top': row['top'],
+            'width': row['width'],
+            'height': row['height']
+        })
 
-    lines = sorted(lines, key=lambda x: x['y'])
+    # Heuristic pairing: find nearby text blocks on the same line or close vertically
+    pairs = []
+    used_indices = set()
+    for i, line in enumerate(lines):
+        if i in used_indices:
+            continue
+        key = line['text']
+        key_right = line['left'] + line['width']
+        key_bottom = line['top'] + line['height']
 
-    # Display raw OCR lines
-    st.subheader("Detected Text Lines")
-    for line in lines:
-        st.write(f"{line['y']}: {line['text']}")
+        # Find nearest text to the right or below
+        value = ""
+        min_dist = float('inf')
+        value_idx = -1
 
-    # Patterns to identify fields
-    email_pattern = re.compile(r'\S+@\S+')
-    phone_pattern = re.compile(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}')
-    date_pattern = re.compile(r'\d{1,2}/\d{1,2}/\d{2,4}')
-    currency_pattern = re.compile(r'\$\d+[,\d]*')
+        for j, candidate in enumerate(lines):
+            if j == i or j in used_indices:
+                continue
+            # Check if candidate is to the right on the same line
+            same_line = abs(candidate['top'] - line['top']) < 10 and candidate['left'] > key_right
+            below_line = abs(candidate['left'] - line['left']) < 20 and candidate['top'] > key_bottom
 
-    # Extract fields based on patterns and proximity
-    fields = {}
+            if same_line or below_line:
+                dist = np.hypot(candidate['left'] - key_right, candidate['top'] - key_bottom)
+                if dist < min_dist:
+                    min_dist = dist
+                    value = candidate['text']
+                    value_idx = j
 
-    for idx, line in enumerate(lines):
-        text = line['text']
-
-        # Date
-        if date_pattern.search(text):
-            fields["Date"] = date_pattern.search(text).group()
-
-        # Email
-        if email_pattern.search(text):
-            fields["Client Email"] = email_pattern.search(text).group()
-
-        # Phone
-        if phone_pattern.search(text):
-            fields["Client Telephone"] = phone_pattern.search(text).group()
-
-        # Appraiser Fee
-        if currency_pattern.search(text):
-            fields["Appraiser Fee"] = currency_pattern.search(text).group()
-
-    # Heuristically assign other fields based on proximity or keywords
-    for idx, line in enumerate(lines):
-        text = line['text'].lower()
-
-        if "name" in text and "report" not in text:
-            # Use next line if available
-            if idx + 1 < len(lines):
-                fields["Client Name"] = lines[idx + 1]['text']
-
-        if "address" in text:
-            if idx + 1 < len(lines):
-                fields["Property Address"] = lines[idx + 1]['text']
-
-        if "access" in text:
-            fields["Access"] = lines[idx]['text']
-
-        if "eta" in text or "standard" in text:
-            fields["ETA Standard"] = lines[idx]['text']
-
-        if "scheduled" in text and "time" in text:
-            if idx + 1 < len(lines):
-                fields["Scheduled date"] = lines[idx + 1]['text']
-
-        if "report" in text:
-            if idx + 1 < len(lines):
-                fields["Name on report"] = lines[idx + 1]['text']
+        if value_idx != -1:
+            used_indices.add(value_idx)
+        used_indices.add(i)
+        pairs.append((key, value))
 
     # Display extracted fields
+    df = pd.DataFrame(pairs, columns=["Field", "Value"])
     st.subheader("Extracted Fields")
-    df = pd.DataFrame(list(fields.items()), columns=["Field", "Value"])
     st.dataframe(df)
 
     # CSV download
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="Download as CSV",
+        label="Download CSV",
         data=csv,
         file_name="extracted_fields.csv",
         mime="text/csv"
