@@ -12,56 +12,79 @@ def ocr_pdf(file_bytes):
         text += pytesseract.image_to_string(img) + "\n"
     return text
 
-def extract_fields_multiline(text):
-    # Known field names (adjust as needed)
-    known_fields = [
-        "How did you hear about us", "Date", "Client Name", "Client Telephone", "Client Email",
-        "Property Address", "Commercial or Mixed", "Reason for appraisal", "Appraiser Fee",
-        "Scheduled date", "Scheduled time", "ETA Standard", "Access", "Name on report"
+def clean_text(text):
+    # Fix common OCR artifacts
+    replacements = {
+        "â€™": "'",
+        "—": "-",
+        "“": '"',
+        "”": '"',
+        "|": " ",  # Replace pipe with space
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+def extract_fields_advanced(text):
+    # List of known fields in order of appearance
+    fields = [
+        "How did you hear about us",
+        "Date",
+        "Client Name",
+        "Client Information",
+        "Name",
+        "Telephone",
+        "Email",
+        "Property Information",
+        "Commercial or Mixed",
+        "Commercial isal?",
+        "Address or Mixed",
+        "Reason for appraisal",
+        "Appraisal Information",
+        "Appraiser Fee",
+        "Scheduled date",
+        "Scheduled time",
+        "ETA",
+        "Access",
+        "Name on report"
     ]
 
-    lines = text.splitlines()
-    fields = []
-    current_field = None
-    current_value_lines = []
+    # Clean text first
+    text = clean_text(text)
 
-    # Precompile regex to detect field line: field name followed by colon or hyphen
-    field_pattern = re.compile(r"^([A-Za-z0-9 _\-\&\.\']+)\s*[:\-]\s*(.*)$")
+    # Build regex pattern to split text by fields (using lookahead)
+    # Escape field names for regex
+    escaped_fields = [re.escape(f) for f in fields]
+    pattern = r"(?=(" + "|".join(escaped_fields) + r"))"
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+    # Split text by field names, keep the field names in the results
+    parts = re.split(pattern, text)
 
-        # Check if line starts with a known field name followed by colon/hyphen
-        match = field_pattern.match(line)
-        if match and match.group(1).strip() in known_fields:
-            # Save previous field if exists
-            if current_field:
-                value = " ".join(current_value_lines).strip()
-                fields.append((current_field, value))
-            # Start new field
-            current_field = match.group(1).strip()
-            current_value_lines = [match.group(2).strip()]
+    # parts will be like ['', 'Date', '7/23/25 Client Information Name Telephone Email Bruce Davidson ...', 'Name on report', 'The Village of Liberty...']
+
+    # Combine field names with their content
+    combined = []
+    i = 1
+    while i < len(parts):
+        field_name = parts[i].strip()
+        if i + 1 < len(parts):
+            value = parts[i + 1].strip()
         else:
-            # If line does not start with a field, append to current value (multi-line value)
-            if current_field:
-                current_value_lines.append(line)
-            else:
-                # Line before any field detected, ignore or handle as needed
-                pass
+            value = ""
+        combined.append((field_name, value))
+        i += 2
 
-    # Save last field
-    if current_field:
-        value = " ".join(current_value_lines).strip()
-        fields.append((current_field, value))
+    # Post-process combined to merge related fields if needed
+    # For example, "Client Information" contains Name, Telephone, Email in one block
+    # You can parse those subfields here if needed
 
-    return fields
+    # For simplicity, return combined as is
+    return combined
 
 def main():
-    st.title("OCR PDF Field Extractor and CSV Exporter (Improved)")
+    st.title("OCR PDF Field Extractor with Advanced Parsing")
 
-    st.write("Upload an OCR-based PDF file. The app will perform OCR to extract text, then extract fields and values, and allow CSV download.")
+    st.write("Upload an OCR-based PDF file. The app will perform OCR, then extract fields and values using advanced parsing.")
 
     uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
@@ -75,18 +98,19 @@ def main():
             st.error("No text found after OCR. Please check the PDF or try a different file.")
             return
 
-        extracted = extract_fields_multiline(text)
+        extracted = extract_fields_advanced(text)
 
         if not extracted:
             st.warning("No fields and values found with the current extraction pattern.")
-            st.info("You may need to adjust the known fields list or regex pattern in the code to match your PDF format.")
             return
 
+        # Convert to DataFrame
         df = pd.DataFrame(extracted, columns=["Field", "Value"])
 
         st.subheader("Extracted Fields and Values")
         st.dataframe(df)
 
+        # CSV download
         csv_buffer = StringIO()
         df.to_csv(csv_buffer, index=False)
         csv_data = csv_buffer.getvalue()
