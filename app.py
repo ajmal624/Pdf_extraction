@@ -4,108 +4,120 @@ import cv2
 import numpy as np
 import pandas as pd
 import tempfile
-from PIL import Image
 
-# Optional: set this if Tesseract is not in PATH
+# Optional: Set the path to tesseract if needed
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-st.title("Dynamic Document Data Extraction")
+st.title("Private Commercial Appraisal OCR Extractor")
 
-st.write("Upload an image. The app will dynamically extract text lines and associate nearby lines as field-value pairs.")
+st.write("Upload an image of the appraisal form and extract data as CSV.")
 
+# File uploader
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Save the uploaded image temporarily
+    # Save to temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
 
-    # Load the image
+    # Load image with OpenCV
     image = cv2.imread(file_path)
+
+    # Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # OCR with detailed data
-    custom_config = r'--oem 3 --psm 6'
-    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
+    # Apply adaptive thresholding
+    processed = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
 
-    # Filter out empty and low-confidence results
-    data = data[data.conf != -1]
-    data = data.dropna(subset=['text'])
+    # Perform OCR
+    text = pytesseract.image_to_string(processed)
 
-    # Group by lines
-    grouped = data.groupby(['block_num', 'par_num', 'line_num'])
-    lines = []
-    for (block, par, line), group in grouped:
-        line_text = ' '.join(group.text)
-        x = group.left.min()
-        y = group.top.min()
-        w = group.width.max()
-        h = group.height.max()
-        lines.append({
-            'text': line_text.strip(),
-            'x': x,
-            'y': y,
-            'w': w,
-            'h': h,
-            'right': x + w,
-            'bottom': y + h,
-            'center_x': x + w // 2,
-            'center_y': y + h // 2
-        })
+    st.subheader("Extracted Text")
+    st.text_area("OCR Output", text, height=300)
 
-    # Sort lines by y-coordinate (top to bottom)
-    lines = sorted(lines, key=lambda l: (l['y'], l['x']))
+    # Parsing key fields with regex
+    fields = {}
 
-    st.subheader("Detected Lines")
-    for line in lines:
-        st.write(f"{line['y']}: {line['text']}")
+    # Date
+    date_match = st.text_input("Enter date pattern if needed", "Date[:\s]*(\d{1,2}/\d{1,2}/\d{2,4})")
+    match = re.search(date_match, text)
+    if match:
+        fields["Date"] = match.group(1)
 
-    # Associate lines as field-value pairs based on spatial proximity
-    extracted = []
-    used_indices = set()
+    # Email
+    match = re.search(r'[\w\.-]+@[\w\.-]+', text)
+    if match:
+        fields["Client Email"] = match.group(0)
 
-    for i, line in enumerate(lines):
-        if i in used_indices:
-            continue
+    # Telephone
+    match = re.search(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', text)
+    if match:
+        fields["Client Telephone"] = match.group(0)
 
-        label = line['text']
-        value = ""
+    # Name
+    name_match = re.search(r'Name[:\s]*(.*)', text)
+    if name_match:
+        fields["Client Name"] = name_match.group(1).strip()
 
-        # Look for candidate value in nearby lines
-        for j, candidate in enumerate(lines):
-            if j == i or j in used_indices:
-                continue
+    # Address
+    address_match = re.search(r'Address[:\s]*(.*)', text)
+    if address_match:
+        fields["Property Address"] = address_match.group(1).strip()
 
-            # Heuristic: same line and to the right
-            same_line = abs(candidate['y'] - line['y']) < 10
-            to_right = candidate['x'] > line['x'] + line['w']
+    # Commercial or Mixed
+    comm_match = re.search(r'Commercial or Mixed[:\s]*(.*)', text)
+    if comm_match:
+        fields["Commercial or Mixed"] = comm_match.group(1).strip()
 
-            # Heuristic: next line below with similar alignment
-            below = candidate['y'] > line['y'] + line['h'] and abs(candidate['x'] - line['x']) < 50
+    # Reason for appraisal
+    reason_match = re.search(r'Reason for appraisal\?[:\s]*(.*)', text, re.DOTALL)
+    if reason_match:
+        fields["Reason for appraisal"] = reason_match.group(1).strip()
 
-            if same_line and to_right:
-                value = candidate['text']
-                used_indices.add(j)
-                break
-            elif below:
-                value = candidate['text']
-                used_indices.add(j)
-                break
+    # Appraiser Fee
+    fee_match = re.search(r'Appraiser Fee[:\s]*(.*)', text)
+    if fee_match:
+        fields["Appraiser Fee"] = fee_match.group(1).strip()
 
-        extracted.append({'Field': label, 'Value': value})
-        used_indices.add(i)
+    # Scheduled Date
+    sched_date_match = re.search(r'Scheduled date[:\s]*(.*)', text)
+    if sched_date_match:
+        fields["Scheduled date"] = sched_date_match.group(1).strip()
 
-    # Display extracted field-value pairs
+    # Scheduled Time
+    sched_time_match = re.search(r'Scheduled time[:\s]*(.*)', text)
+    if sched_time_match:
+        fields["Scheduled time"] = sched_time_match.group(1).strip()
+
+    # ETA Standard
+    eta_match = re.search(r'ETA Standard is (.*)', text)
+    if eta_match:
+        fields["ETA Standard"] = eta_match.group(1).strip()
+
+    # Access
+    access_match = re.search(r'Access to (.*)', text)
+    if access_match:
+        fields["Access"] = "Access to " + access_match.group(1).strip()
+
+    # Name on Report
+    report_match = re.search(r'Name on report[:\s]*(.*)', text, re.DOTALL)
+    if report_match:
+        fields["Name on report"] = report_match.group(1).strip()
+
+    # Create DataFrame
+    df = pd.DataFrame(list(fields.items()), columns=["Field", "Value"])
+
     st.subheader("Extracted Fields")
-    df = pd.DataFrame(extracted)
     st.dataframe(df)
 
-    # CSV download
+    # Allow download as CSV
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download CSV",
         data=csv,
-        file_name="extracted_data.csv",
+        file_name="appraisal_data.csv",
         mime="text/csv"
     )
