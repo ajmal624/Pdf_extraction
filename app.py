@@ -4,6 +4,7 @@ from pdf2image import convert_from_bytes
 import pandas as pd
 import pytesseract
 from io import BytesIO
+import re
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App")
@@ -64,39 +65,32 @@ if uploaded_file:
                 else:
                     st.warning("⚠️ No data extracted from this PDF.")
 
-    # -------------------- OCR Extraction to CSV --------------------
+    # -------------------- OCR Extraction to CSV (Table Format) --------------------
     with col2:
         if st.button("Table Extraction to CSV (OCR)"):
             uploaded_file.seek(0)
             extracted_data = []
 
             try:
-                # Convert PDF pages into images
                 pdf_images = convert_from_bytes(uploaded_file.read())
 
                 for i, page_img in enumerate(pdf_images):
+                    # OCR extract text from image
                     text = pytesseract.image_to_string(page_img)
-                    lines = text.splitlines()
-                    page_dict = {}
-                    current_field = None
+                    lines = [l.strip() for l in text.splitlines() if l.strip()]
 
                     for line in lines:
-                        line = line.strip()
-                        if not line:
-                            continue
-
-                        # Heuristic: short lines without digits = potential field name
-                        if len(line.split()) <= 5 and not any(c.isdigit() for c in line):
-                            current_field = line
-                            page_dict[current_field] = ""
-                        elif current_field:
-                            page_dict[current_field] += (" " + line if page_dict[current_field] else line)
-
-                    if page_dict:
-                        extracted_data.append(page_dict)
+                        # Split line into columns by 2+ spaces or tabs
+                        columns = re.split(r"\s{2,}|\t", line)
+                        if len(columns) > 1:  # Only keep valid table rows
+                            extracted_data.append(columns)
 
                 if extracted_data:
-                    df = pd.DataFrame(extracted_data)
+                    # First row = headers, rest = data rows
+                    headers = extracted_data[0]
+                    rows = extracted_data[1:]
+
+                    df = pd.DataFrame(rows, columns=headers)
                     st.success("✅ Table data extracted with OCR!")
                     st.dataframe(df)
 
@@ -109,6 +103,6 @@ if uploaded_file:
                     )
                 else:
                     st.warning("⚠️ No table data could be extracted from this PDF.")
-            
+
             except Exception as e:
                 st.error(f"OCR extraction failed: {e}")
