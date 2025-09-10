@@ -8,20 +8,16 @@ st.set_page_config(layout="wide")
 
 # ---------- Helpers ----------
 def normalize_text(text: str) -> str:
+    """Cleans and normalizes extracted text."""
     if text is None:
         return ""
-    # collapse whitespace/newlines/tabs, strip quotes
-    text = re.sub(r'[\r\n\t]+', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'[\r\n\t]+', ' ', text)  # replace newlines/tabs with space
+    text = re.sub(r'\s+', ' ', text).strip()  # collapse spaces
     text = text.strip(' "\'`')  # trim surrounding quotes
     return text
 
 def is_probable_section_title(text: str) -> bool:
-    """
-    Heuristics to decide if text is a section title:
-      - Contains words like 'information', 'details', 'section', 'form', 'info'
-      - Or is short and likely a heading
-    """
+    """Heuristic to skip generic section titles."""
     if not text:
         return False
     t = text.lower()
@@ -29,10 +25,7 @@ def is_probable_section_title(text: str) -> bool:
     return any(k in t for k in keywords)
 
 def extract_from_table(table):
-    """
-    Walk through a table row-by-row and extract (field, value) pairs.
-    Handles rows with multiple field/value pairs.
-    """
+    """Extract (field, value) pairs from Word table rows."""
     pairs = []
     for row in table.rows:
         cells = [normalize_text(c.text) for c in row.cells]
@@ -40,7 +33,7 @@ def extract_from_table(table):
         if not non_empty:
             continue
 
-        # Skip single-cell rows if they look like a section header
+        # Skip single-cell rows if they look like section headers
         if len(non_empty) == 1 and is_probable_section_title(non_empty[0]):
             continue
 
@@ -59,9 +52,7 @@ def extract_from_table(table):
     return pairs
 
 def extract_from_paragraphs(paragraphs):
-    """
-    Extract field:value pairs from paragraphs with colons.
-    """
+    """Extract (field, value) pairs from paragraphs with colon separation."""
     pairs = []
     for p in paragraphs:
         line = normalize_text(p)
@@ -75,6 +66,7 @@ def extract_from_paragraphs(paragraphs):
     return pairs
 
 def extract_docx_auto(docx_file):
+    """Extract all field-value pairs from DOCX (tables + paragraphs)."""
     doc = Document(docx_file)
     pairs = []
 
@@ -86,7 +78,7 @@ def extract_docx_auto(docx_file):
     paragraph_texts = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
     pairs.extend(extract_from_paragraphs(paragraph_texts))
 
-    # Clean & deduplicate
+    # Deduplicate (last value wins)
     cleaned = {}
     for k, v in pairs:
         k, v = normalize_text(k), normalize_text(v)
@@ -97,11 +89,11 @@ def extract_docx_auto(docx_file):
     return pairs, cleaned
 
 # ---------- Streamlit UI ----------
-st.title("DOCX → Clean CSV Extractor")
+st.title("DOCX → CSV Extractor (Fields Row 1, Values Row 2)")
 
 uploaded = st.file_uploader("Upload a DOCX file", type=["docx"])
 if not uploaded:
-    st.info("Upload a .docx file to extract fields and values into a clean CSV.")
+    st.info("Upload a .docx file to extract fields and values.")
     st.stop()
 
 pairs, row_dict = extract_docx_auto(uploaded)
@@ -112,42 +104,41 @@ if pairs:
 else:
     pairs_df = pd.DataFrame(columns=["Field", "Value"])
 
-# Allow editing of field-value pairs
+# Allow user to edit detected pairs
 edited = st.data_editor(pairs_df, num_rows="dynamic")
 
 if st.button("Build final table and download CSV"):
-    # Drop empty fields
+    # Drop empty rows
     edited = edited.dropna(subset=["Field"]).copy()
-    edited["Field"] = edited["Value"].astype(str).map(normalize_text)
-    edited["Value"] = edited["Field"].astype(str).map(normalize_text)
+    edited["Field"] = edited["Field"].astype(str).map(normalize_text)
+    edited["Value"] = edited["Value"].astype(str).map(normalize_text)
 
-    # Convert to single-row DataFrame
-    final_dict = {}
-    for _, r in edited.iterrows():
-        if r["Field"]:
-            final_dict[r["Field"]] = r["Value"]
+    # Create two-row DataFrame: row1=fields, row2=values
+    fields = edited["Field"].tolist()
+    values = edited["Value"].tolist()
 
-    if not final_dict:
-        st.error("No valid data found. Please edit the table or upload another DOCX.")
-    else:
-        final_df = pd.DataFrame([final_dict])
-        st.markdown("### Final Table")
-        st.dataframe(final_df)
+    final_df = pd.DataFrame([fields, values])
+    final_df.index = ["Field", "Value"]  # optional row labels
 
-        # Prepare CSV
-        buffer = io.StringIO()
-        final_df.to_csv(buffer, index=False)
-        st.download_button(
-            label="Download CSV",
-            data=buffer.getvalue().encode("utf-8"),
-            file_name="extracted_doc.csv",
-            mime="text/csv"
-        )
+    st.markdown("### Final Table (Row 1 = Fields, Row 2 = Values)")
+    st.dataframe(final_df)
+
+    # Prepare CSV
+    buffer = io.StringIO()
+    final_df.to_csv(buffer, index=False, header=False)
+    st.download_button(
+        label="Download CSV",
+        data=buffer.getvalue().encode("utf-8"),
+        file_name="extracted_doc.csv",
+        mime="text/csv"
+    )
 
 st.markdown("""
-**How it works:**  
-- Extracts text from tables and paragraphs  
-- Auto-detects and skips section headers (not hardcoded)  
-- Lets you edit data before saving  
-- Produces **one clean row per document**
+**How this works:**  
+- Extracts text from both **tables** and **paragraphs**  
+- Skips section headers (no fixed list, uses heuristics)  
+- Lets you **edit fields/values** before exporting  
+- Creates a **two-row CSV**:  
+  - Row 1: Fields  
+  - Row 2: Corresponding Values
 """)
