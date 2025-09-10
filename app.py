@@ -6,14 +6,14 @@ import pandas as pd
 import tempfile
 from PIL import Image
 
-st.title("Document Field Name Extraction")
+st.title("Extract Bold Field Names from Image")
 
-st.write("Upload an image and extract only the field names using OCR.")
+st.write("Upload an image file and extract only the bold field names into a CSV.")
 
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Save the uploaded image temporarily
+    # Save the uploaded file temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
         tmp_file.write(uploaded_file.read())
         file_path = tmp_file.name
@@ -22,63 +22,60 @@ if uploaded_file is not None:
     image = cv2.imread(file_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # OCR with detailed data
-    custom_config = r'--oem 3 --psm 6'
-    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
+    # Apply adaptive threshold to highlight bold areas
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, 
+                                   cv2.THRESH_BINARY_INV, 15, 10)
 
-    # Remove empty text entries and low confidence results
+    # Dilate to connect text and make bold regions more visible
+    kernel = np.ones((2,2), np.uint8)
+    dilated = cv2.dilate(thresh, kernel, iterations=1)
+
+    # Find contours which may correspond to bold text
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    mask = np.zeros_like(gray)
+
+    # Filter by contour area and draw them on mask
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 100:  # Tune this threshold as needed
+            cv2.drawContours(mask, [cnt], -1, 255, -1)
+
+    # OCR only on bold-like areas
+    result = cv2.bitwise_and(gray, gray, mask=mask)
+
+    # OCR
+    custom_config = r'--oem 3 --psm 6'
+    data = pytesseract.image_to_data(result, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
+
+    # Clean data
     data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
 
-    # Group by line number
+    # Group lines
     grouped = data.groupby(['block_num', 'par_num', 'line_num'])
-
-    lines = []
+    field_names = set()
     for (block, par, line), group in grouped:
         line_text = ' '.join(group.text).strip()
-        lines.append({'text': line_text})
+        if line_text:
+            field_names.add(line_text)
 
-    # Heuristic to find field names:
-    # - Lines that end with ":" or "-"
-    # - Lines that are short (<= 5 words)
-    # - Lines that are all uppercase or title case
+    # Sort for display
+    sorted_fields = sorted(field_names)
 
-    possible_fields = set()
+    st.subheader("Extracted Bold Field Names")
 
-    for i, line in enumerate(lines):
-        text = line['text']
-
-        # Rule 1: Ends with ":" or "-"
-        if text.endswith(":") or text.endswith("-"):
-            possible_fields.add(text.rstrip(":-").strip())
-            continue
-
-        # Rule 2: Short lines, likely field names
-        if len(text.split()) <= 5:
-            possible_fields.add(text.strip())
-            continue
-
-        # Rule 3: Lines in uppercase or title case
-        if text.isupper() or text.istitle():
-            possible_fields.add(text.strip())
-            continue
-
-    # Convert to sorted list
-    sorted_fields = sorted(possible_fields)
-
-    # Display the extracted field names
-    st.subheader("Extracted Field Names")
     if sorted_fields:
         df = pd.DataFrame(sorted_fields, columns=["Field Name"])
         st.dataframe(df)
 
-        # CSV download button
+        # CSV download
         csv = df.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="Download Field Names as CSV",
+            label="Download CSV",
             data=csv,
-            file_name="field_names.csv",
+            file_name="bold_field_names.csv",
             mime="text/csv"
         )
     else:
-        st.write("No field names detected.")
+        st.write("No bold fields detected.")
