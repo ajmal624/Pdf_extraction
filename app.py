@@ -5,16 +5,15 @@ import pandas as pd
 import pytesseract
 from io import BytesIO
 import re
-import numpy as np
 from PIL import Image
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App")
 
-# ----------- Preprocessing for better OCR (Pillow only) -----------
+# ----------- Preprocessing for better OCR -----------
 def preprocess_image(pil_img):
     img = pil_img.convert("L")  # grayscale
-    img = img.point(lambda x: 0 if x < 150 else 255, "1")  # threshold
+    img = img.point(lambda x: 0 if x < 150 else 255, "1")  # binary threshold
     return img
 
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
@@ -80,88 +79,73 @@ if uploaded_file:
                 else:
                     st.warning("⚠️ No data extracted from this PDF.")
 
-    # -------------------- OCR Extraction to CSV (Better Table Alignment) --------------------
+    # -------------------- OCR Extraction to CSV (Fields=Row2, Values=Row3) --------------------
     with col2:
         if st.button("Table Extraction to CSV (OCR)"):
             uploaded_file.seek(0)
-            extracted_rows = []
+            all_records = []
 
             try:
                 pdf_images = convert_from_bytes(uploaded_file.read())
-                all_ocr_text = []
+                debug_texts = []
 
                 for i, page_img in enumerate(pdf_images):
                     processed_img = preprocess_image(page_img)
 
-                    # Get OCR results with positions
+                    # OCR with positions
                     data = pytesseract.image_to_data(
                         processed_img,
                         output_type=pytesseract.Output.DATAFRAME,
                         config="--psm 6"
                     )
 
-                    # Drop empty
                     data = data.dropna(subset=["text"])
                     if data.empty:
                         continue
 
-                    all_ocr_text.append(f"--- Page {i+1} ---\n" + "\n".join(data["text"].tolist()))
+                    debug_texts.append(f"--- Page {i+1} ---\n" + "\n".join(data["text"].tolist()))
 
-                    # Group words by line_num
+                    # Group by line_num (rows)
+                    page_rows = []
                     for line_num, row_group in data.groupby("line_num"):
                         words = row_group[["left", "text"]].values.tolist()
                         words = [(int(x), str(t).strip()) for x, t in words if t.strip()]
-
                         if not words:
                             continue
+                        words.sort(key=lambda x: x[0])  # sort by x position
+                        row_text = [w for _, w in words]
+                        page_rows.append(row_text)
 
-                        # Sort by x-position
-                        words.sort(key=lambda x: x[0])
+                    # Apply your rule: 2nd row = fields, 3rd row = values
+                    if len(page_rows) >= 3:
+                        fields = page_rows[1]
+                        values = page_rows[2]
 
-                        # Group into columns by x gaps
-                        row = []
-                        current_col = []
-                        prev_x = None
+                        # Pad shorter list
+                        max_len = max(len(fields), len(values))
+                        fields += [""] * (max_len - len(fields))
+                        values += [""] * (max_len - len(values))
 
-                        for x, word in words:
-                            if prev_x is not None and x - prev_x > 50:  # gap = new column
-                                row.append(" ".join(current_col))
-                                current_col = []
-                            current_col.append(word)
-                            prev_x = x
-                        if current_col:
-                            row.append(" ".join(current_col))
+                        record = dict(zip(fields, values))
+                        all_records.append(record)
 
-                        if len(row) > 1:  # keep tabular rows
-                            extracted_rows.append(row)
-
-                if extracted_rows:
-                    headers = extracted_rows[0]
-                    rows = extracted_rows[1:]
-
-                    # Normalize row lengths
-                    max_len = len(headers)
-                    rows = [
-                        row + [""] * (max_len - len(row)) if len(row) < max_len else row[:max_len]
-                        for row in rows
-                    ]
-
-                    df = pd.DataFrame(rows, columns=headers)
-                    st.success("✅ Table data extracted with OCR!")
+                if all_records:
+                    df = pd.DataFrame(all_records)
+                    st.success("✅ Field-Value pairs extracted with OCR!")
                     st.dataframe(df)
 
                     csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8")
                     st.download_button(
                         "📥 Download CSV",
                         data=csv_bytes,
-                        file_name="table_pdf_extraction.csv",
+                        file_name="ocr_field_value_extraction.csv",
                         mime="text/csv"
                     )
                 else:
-                    st.warning("⚠️ OCR text extracted, but no table-like structure was detected.")
+                    st.warning("⚠️ OCR text extracted, but no valid table rows found.")
 
                 if st.checkbox("🔍 Show raw OCR text"):
-                    st.text("\n\n".join(all_ocr_text))
+                    st.text("\n\n".join(debug_texts))
 
             except Exception as e:
                 st.error(f"OCR extraction failed: {e}")
