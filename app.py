@@ -1,51 +1,58 @@
 import streamlit as st
-from PIL import Image
 import pytesseract
+import cv2
+import numpy as np
 import pandas as pd
-import re
+from PIL import Image
+import tempfile
 
-# Optional: If Tesseract is not in your PATH, set the correct path
+# Optional: Set this if Tesseract is not in PATH
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-st.title("Extract Field Names from Uploaded Image")
+st.title("Field Name Extraction from Image")
 
-st.write("Upload an image and extract field names (complete lines, not individual words).")
+st.write("Upload an image, and the app will extract grouped field names and let you download them as CSV.")
 
-# Upload image
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
     # Load image from uploaded file
-    img = Image.open(uploaded_file)
+    image = Image.open(uploaded_file)
+    image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
 
-    st.image(img, caption="Uploaded Image", use_column_width=True)
-
-    # OCR with pytesseract
+    # OCR with detailed data
     custom_config = r'--oem 3 --psm 6'
-    data = pytesseract.image_to_data(img, config=custom_config, output_type=pytesseract.Output.DATAFRAME)
+    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DATAFRAME, config=custom_config)
 
-    # Filter out empty and low-confidence entries
+    # Filter out empty texts and low confidence
     data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
-    data = data[data.conf > 50]  # Adjust confidence threshold if needed
 
-    # Group text by block, paragraph, and line numbers
+    # Group by line structure
     grouped = data.groupby(['block_num', 'par_num', 'line_num'])
 
     lines = []
-    for _, group in grouped:
+    for (block, par, line), group in grouped:
         line_text = ' '.join(group.text).strip()
-        lines.append(line_text)
+        if line_text:  # Only include non-empty lines
+            lines.append(line_text)
 
-    # Remove duplicates and empty lines
-    lines = list(dict.fromkeys(lines))
-    lines = [line for line in lines if len(line) > 2]
+    # Remove duplicates and keep order
+    seen = set()
+    field_names = []
+    for line in lines:
+        if line not in seen:
+            seen.add(line)
+            field_names.append(line)
 
+    # Show extracted field names
     st.subheader("Extracted Field Names")
-    df = pd.DataFrame(lines, columns=["Field Name"])
-    st.dataframe(df)
+    for fname in field_names:
+        st.write(fname)
 
-    # Download CSV
+    # Prepare CSV for download
+    df = pd.DataFrame(field_names, columns=["Field Name"])
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download CSV",
