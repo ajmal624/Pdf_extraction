@@ -2,8 +2,10 @@ import streamlit as st
 import pdfplumber
 from pdf2image import convert_from_bytes
 import pandas as pd
+import pytesseract
 from io import BytesIO
 from docx import Document
+from PIL import Image
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App")
@@ -70,77 +72,50 @@ if uploaded_file:
                 else:
                     st.warning("⚠️ No data extracted from this PDF.")
 
-    # -------------------- OCR/Table Extraction --------------------
+    # -------------------- OCR Table Extraction → Word → CSV --------------------
     with col2:
-        if st.button("Table Extraction to Word/CSV"):
+        if st.button("OCR Scanned PDF → Word → CSV"):
             uploaded_file.seek(0)
-            extracted_records = []
             try:
-                with pdfplumber.open(uploaded_file) as pdf:
-                    all_tables = []
-                    # Collect all tables with page and table index
-                    for page_num, page in enumerate(pdf.pages, start=1):
-                        tables = page.extract_tables()
-                        for tidx, table in enumerate(tables, start=1):
-                            all_tables.append((page_num, tidx, table))
+                pdf_images = convert_from_bytes(uploaded_file.read())
+                word_doc = Document()
+                word_doc.add_heading("Extracted OCR Data", level=1)
+                extracted_records = []
 
-                if not all_tables:
-                    st.warning("⚠️ No tables found in this PDF.")
-                else:
-                    st.success(f"✅ Found {len(all_tables)} tables!")
+                for page_num, page_img in enumerate(pdf_images, start=1):
+                    # OCR text
+                    text = pytesseract.image_to_string(page_img)
+                    lines = [line.strip() for line in text.splitlines() if line.strip()]
 
-                    for page_num, tidx, table in all_tables:
-                        st.write(f"### Table {tidx} (Page {page_num})")
-                        df_preview = pd.DataFrame(table)
-                        st.dataframe(df_preview)
+                    if not lines:
+                        continue
 
-                        # Let user select rows for fields and values
-                        field_row = st.number_input(
-                            f"Select field row for Table {tidx} (Page {page_num})",
-                            min_value=0, max_value=len(table)-1, value=0, step=1, key=f"field_{page_num}_{tidx}"
-                        )
-                        value_row = st.number_input(
-                            f"Select value row for Table {tidx} (Page {page_num})",
-                            min_value=0, max_value=len(table)-1, value=1, step=1, key=f"value_{page_num}_{tidx}"
-                        )
+                    # heuristic: detect tables as consecutive non-empty lines
+                    # assume each two consecutive lines = fields & values
+                    for i in range(0, len(lines)-1, 2):
+                        fields_line = lines[i].split()
+                        values_line = lines[i+1].split()
+                        record = {}
+                        for f, v in zip(fields_line, values_line):
+                            record[f] = v
+                        if record:
+                            extracted_records.append(record)
+                            # add to Word table
+                            table = word_doc.add_table(rows=1, cols=2)
+                            hdr_cells = table.rows[0].cells
+                            hdr_cells[0].text = "Field"
+                            hdr_cells[1].text = "Value"
+                            for field, value in record.items():
+                                row_cells = table.add_row().cells
+                                row_cells[0].text = field
+                                row_cells[1].text = value
+                            word_doc.add_paragraph()
 
-                        if st.button(f"Extract Table {tidx} (Page {page_num})", key=f"extract_{page_num}_{tidx}"):
-                            fields = table[field_row]
-                            values = table[value_row]
-                            record = {}
-                            for f, v in zip(fields, values):
-                                if f and v:
-                                    record[str(f).strip()] = str(v).strip()
-                            if record:
-                                extracted_records.append(record)
-                                st.success(f"✅ Extracted {len(record)} fields from Table {tidx} (Page {page_num})")
-                                st.json(record)
-
-                # Download final results
                 if extracted_records:
-                    df = pd.DataFrame(extracted_records)
-                    st.write("### Final Extracted Data")
-                    st.dataframe(df)
-
-                    # Save to Word
-                    doc = Document()
-                    doc.add_heading("Extracted Table Data", level=1)
-                    for idx, record in enumerate(extracted_records, start=1):
-                        doc.add_heading(f"Record {idx}", level=2)
-                        table_doc = doc.add_table(rows=1, cols=2)
-                        hdr_cells = table_doc.rows[0].cells
-                        hdr_cells[0].text = "Field"
-                        hdr_cells[1].text = "Value"
-                        for field, value in record.items():
-                            row_cells = table_doc.add_row().cells
-                            row_cells[0].text = str(field)
-                            row_cells[1].text = str(value)
-                        doc.add_paragraph()
-
+                    # Save Word
                     word_bytes = BytesIO()
-                    doc.save(word_bytes)
+                    word_doc.save(word_bytes)
                     word_bytes.seek(0)
-
                     st.download_button(
                         "📥 Download Word Document",
                         data=word_bytes,
@@ -148,7 +123,9 @@ if uploaded_file:
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
 
-                    # CSV download
+                    # Save CSV
+                    df = pd.DataFrame(extracted_records)
+                    st.dataframe(df)
                     csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8")
                     st.download_button(
                         "📥 Download CSV",
@@ -156,6 +133,8 @@ if uploaded_file:
                         file_name="ocr_extraction.csv",
                         mime="text/csv"
                     )
+                else:
+                    st.warning("⚠️ OCR could not detect tables/fields in this PDF.")
 
             except Exception as e:
-                st.error(f"Table extraction failed: {e}")
+                st.error(f"OCR → Word → CSV extraction failed: {e}")
