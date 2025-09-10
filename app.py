@@ -21,42 +21,46 @@ def is_probable_section_title(text):
     keywords = ['information', 'info', 'details', 'section', 'form', 'appraisal']
     return any(k in text.lower() for k in keywords)
 
+# Improved table extraction for multi-field rows
 def extract_from_table(table):
     pairs = []
     for row in table.rows:
-        # Take first 2 non-empty cells as field/value
+        # Get non-empty, normalized cells
         cells = [normalize_text(c.text) for c in row.cells if normalize_text(c.text)]
-        if len(cells) >= 2:
-            field, value = cells[0], cells[1]
+        i = 0
+        while i + 1 < len(cells):
+            field, value = cells[i], cells[i + 1]
             if not is_probable_section_title(field):
                 pairs.append((field, value))
+            i += 2  # move to next field-value pair in the same row
     return pairs
 
+# Improved paragraph extraction
 def extract_from_paragraphs(paragraphs):
     pairs = []
     for p in paragraphs:
         line = normalize_text(p)
         if not line:
             continue
-        # Check for ':' or '-' separator
-        if ":" in line:
-            field, value = line.split(":", 1)
-        elif "-" in line:
-            field, value = line.split("-", 1)
-        else:
-            continue
-        field, value = normalize_text(field), normalize_text(value)
-        if field and not is_probable_section_title(field):
-            pairs.append((field, value))
+        # Accept multiple separators
+        for sep in [":", "-"]:
+            if sep in line:
+                field, value = line.split(sep, 1)
+                field, value = normalize_text(field), normalize_text(value)
+                if field and not is_probable_section_title(field):
+                    pairs.append((field, value))
+                break
     return pairs
 
 def extract_docx_auto(docx_file):
     doc = Document(docx_file)
     pairs = []
 
+    # Extract from tables
     for table in doc.tables:
         pairs.extend(extract_from_table(table))
 
+    # Extract from paragraphs
     paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
     pairs.extend(extract_from_paragraphs(paragraphs))
 
@@ -90,7 +94,7 @@ if uploaded:
                 st.markdown("### Final Table (Row 1 = Fields, Row 2 = Values)")
                 st.dataframe(final_df)
 
-                # Download CSV
+                # Prepare CSV for download
                 buffer = io.StringIO()
                 final_df.to_csv(buffer, index=False, header=False)
                 st.download_button(
@@ -103,3 +107,13 @@ if uploaded:
         st.error(f"Error reading DOCX: {e}")
 else:
     st.info("Upload a .docx file to extract fields and values.")
+
+st.markdown("""
+**How this works:**  
+- Extracts text from **tables** and **paragraphs**  
+- Handles tables with **multiple field-value pairs per row**  
+- Skips section headers automatically  
+- Produces a **two-row CSV**:
+  - Row 1: Fields  
+  - Row 2: Corresponding Values
+""")
