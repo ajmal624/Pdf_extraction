@@ -118,8 +118,8 @@ edited = st.data_editor(pairs_df, num_rows="dynamic")
 if st.button("Build final table and download CSV"):
     # Drop empty fields
     edited = edited.dropna(subset=["Field"]).copy()
-    edited["Field"] = edited["Field"].astype(str).map(normalize_text)
-    edited["Value"] = edited["Value"].astype(str).map(normalize_text)
+    edited["Field"] = edited["Value"].astype(str).map(normalize_text)
+    edited["Field"] = edited["Value"].astype(str).map(normalize_text)
 
     # Convert to single-row DataFrame
     final_dict = {}
