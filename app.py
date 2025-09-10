@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-st.title("Field Name Extraction from Image (Heuristic Filter)")
+st.title("Field Name Extraction from Image")
 
 uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
 
@@ -23,7 +23,7 @@ if uploaded_file is not None:
     data = data[data.conf != -1]
     data = data.dropna(subset=['text'])
 
-    # Group by lines
+    # Group lines
     grouped = data.groupby(['block_num', 'par_num', 'line_num'])
     lines = []
     for (_, _, _), group in grouped:
@@ -31,22 +31,29 @@ if uploaded_file is not None:
         if line_text:
             lines.append(line_text)
 
-    # Heuristic: Consider lines with fewer than 6 words and not full sentences
+    # Heuristic filtering
+    keywords = ["Information", "Address", "Commercial", "Appraisal", "Fee", "Schedule", "Access", "Name", "Date", "Telephone", "Email"]
     field_names = []
     for line in lines:
         words = line.split()
-        if len(words) <= 6 and not any(char in line for char in [":", "|", "-", "—"]) and not any(char.isdigit() for char in line):
+        num_words = len(words)
+        has_numbers = any(char.isdigit() for char in line)
+        punctuation_count = sum(1 for char in line if char in [":", "|", "-", "—", ".", ","])
+        
+        # Include if line is short OR has known keywords
+        if (num_words <= 8 and not has_numbers and punctuation_count <= 2) or any(kw.lower() in line.lower() for kw in keywords):
             field_names.append(line)
 
-    # Further remove duplicates while preserving order
+    # Remove duplicates and empty lines
     seen = set()
     filtered_fields = []
     for name in field_names:
-        if name not in seen:
+        name = name.strip()
+        if name and name not in seen:
             seen.add(name)
             filtered_fields.append(name)
 
-    # Display results
+    # Display extracted field names
     st.subheader("Extracted Field Names")
     for name in filtered_fields:
         st.write(name)
