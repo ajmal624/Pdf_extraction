@@ -5,18 +5,19 @@ import pandas as pd
 import pytesseract
 from io import BytesIO
 import re
-import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 st.set_page_config(page_title="PDF Field Extractor", layout="wide")
 st.title("📄 PDF Field Extractor App")
 
-# ----------- Preprocessing for better OCR -----------
+# ----------- Preprocessing for better OCR (Pillow only) -----------
 def preprocess_image(pil_img):
-    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
-    _, img = cv2.threshold(img, 150, 255, cv2.THRESH_BINARY)
-    return Image.fromarray(img)
+    # Convert to grayscale
+    img = pil_img.convert("L")
+    # Apply binary threshold
+    img = img.point(lambda x: 0 if x < 150 else 255, "1")
+    return img
 
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
