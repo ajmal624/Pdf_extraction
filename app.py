@@ -5,6 +5,7 @@ import re
 import pandas as pd
 from io import StringIO
 
+# OCR extraction from PDF bytes
 def ocr_pdf(file_bytes):
     images = convert_from_bytes(file_bytes)
     text = ""
@@ -12,6 +13,7 @@ def ocr_pdf(file_bytes):
         text += pytesseract.image_to_string(img) + "\n"
     return text
 
+# Clean common OCR artifacts
 def clean_text(text):
     replacements = {
         "â€™": "'",
@@ -24,10 +26,11 @@ def clean_text(text):
         text = text.replace(old, new)
     return text
 
+# Extract fields and values by splitting text on known field names
 def extract_fields_advanced(text):
     text = clean_text(text)
 
-    # Split by known fields (same as before)
+    # List of known fields (adjust as needed)
     fields = [
         "How did you hear about us",
         "Date",
@@ -69,17 +72,16 @@ def extract_fields_advanced(text):
 
     # Helper to extract subfields from Client Information block
     def parse_client_info(text):
-        # Try to extract Name, Telephone, Email from one string
         name = ""
         telephone = ""
         email = ""
 
-        # Simple regex for email
+        # Extract email
         email_match = re.search(r"[\w\.-]+@[\w\.-]+", text)
         if email_match:
             email = email_match.group(0)
 
-        # Simple regex for phone (basic)
+        # Extract phone (basic pattern)
         phone_match = re.search(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b", text)
         if phone_match:
             telephone = phone_match.group(0)
@@ -96,7 +98,6 @@ def extract_fields_advanced(text):
 
     for field, value in combined:
         if field == "Client Information":
-            # Parse subfields from this block
             name, telephone, email = parse_client_info(value)
             if name:
                 result["Client Name"] = name
@@ -105,7 +106,6 @@ def extract_fields_advanced(text):
             if email:
                 result["Client Email"] = email
         elif field == "Email":
-            # Sometimes Email line contains name and phone too
             name, telephone, email = parse_client_info(value)
             if name:
                 result["Client Name"] = name
@@ -114,8 +114,7 @@ def extract_fields_advanced(text):
             if email:
                 result["Client Email"] = email
         elif field == "Scheduled time":
-            # Sometimes scheduled time line contains date and time
-            # Extract date and time if present
+            # Extract date and time if present in value
             date_match = re.search(r"\b\d{1,2}/\d{1,2}\b|\b\w{3}-\d{1,2}\b", value)
             time_match = re.search(r"\b\d{1,2}:\d{2}\s*(am|pm)?\b", value, re.I)
             if date_match:
@@ -125,14 +124,33 @@ def extract_fields_advanced(text):
             else:
                 result["Scheduled time"] = value.strip()
         else:
-            # Normal assignment
-            # Remove field name from value if repeated (e.g. "Date:7/23/25")
+            # Remove repeated field name from value if present
             cleaned_value = re.sub(rf"^{re.escape(field)}[:\-]?\s*", "", value, flags=re.I).strip()
             if cleaned_value:
                 result[field] = cleaned_value
 
     # Return as list of tuples for DataFrame
     return list(result.items())
+
+# Additional cleaning for slight fixes requested
+def clean_extracted_data(extracted):
+    cleaned = []
+    for field, value in extracted:
+        if field == "How did you hear about us":
+            value = value.lstrip("- ").strip()
+
+        if field == "Client Name":
+            value = re.sub(r"\bEmail\b", "", value, flags=re.I).strip()
+
+        if field == "Access":
+            value = re.sub(r"^to\s+", "", value, flags=re.I).strip()
+
+        if field == "Name":
+            field = "Name on report"
+            value = value.lstrip("on report:").strip()
+
+        cleaned.append((field, value))
+    return cleaned
 
 def main():
     st.title("OCR PDF Field Extractor with Post-Processing")
@@ -152,12 +170,13 @@ def main():
             return
 
         extracted = extract_fields_advanced(text)
+        extracted_cleaned = clean_extracted_data(extracted)
 
-        if not extracted:
+        if not extracted_cleaned:
             st.warning("No fields and values found with the current extraction pattern.")
             return
 
-        df = pd.DataFrame(extracted, columns=["Field", "Value"])
+        df = pd.DataFrame(extracted_cleaned, columns=["Field", "Value"])
 
         st.subheader("Extracted Fields and Values")
         st.dataframe(df)
