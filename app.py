@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image
+import re
 
 st.title("Field Name Extractor from Image")
 
@@ -30,32 +31,43 @@ if uploaded_file is not None:
             lines.append(line_text)
 
     # Known keywords that likely represent field names
-    keywords = ["Date", "Client", "Information", "Property", "Commercial", "Address", "Reason", "Appraisal", "Fee", "Scheduled", "Time", "Access", "Name"]
+    keywords = ["Date", "Client", "Information", "Property", "Commercial", "Address",
+                "Reason", "Appraisal", "Fee", "Scheduled", "Time", "Access", "Name"]
 
     field_names = []
     for line in lines:
         original_line = line
         line = line.strip()
 
-        # Normalize line by splitting at colon
+        # Remove lines that are mostly punctuation or too noisy
+        num_chars = len(line)
+        if num_chars == 0:
+            continue
+
+        # Count numbers and punctuation
+        num_numbers = sum(c.isdigit() for c in line)
+        num_punctuations = sum(1 for c in line if not c.isalnum() and not c.isspace())
+
+        # Heuristic rules to remove noise
+        if num_numbers / max(1, num_chars) > 0.5:
+            continue  # too many numbers
+        if num_punctuations / max(1, num_chars) > 0.3:
+            continue  # too much punctuation
+        if len(line) < 2:
+            continue  # too short
+
+        # Normalize line by removing extra spaces and splitting at colon
         if ':' in line:
             line = line.split(':')[0].strip()
 
-        words = line.split()
-        num_words = len(words)
-        has_numbers = any(char.isdigit() for char in line)
-        punctuation_count = sum(1 for char in line if char in [":", "|", "-", "—", ".", ","])
-
-        # Conditions to keep the line
-        is_short = num_words <= 6
+        # Check for keywords
         has_keyword = any(kw.lower() in line.lower() for kw in keywords)
 
-        # Accept if it is short or has known keywords, but not if it's mostly noise
-        if (is_short or has_keyword) and punctuation_count < 5:
-            if not has_numbers or has_keyword:
-                field_names.append(line)
+        # Accept lines if they have keywords or are short and clean
+        if has_keyword or (len(line.split()) <= 5 and num_punctuations < 3):
+            field_names.append(line)
 
-    # Remove duplicates and keep order
+    # Remove duplicates while preserving order
     seen = set()
     final_fields = []
     for name in field_names:
