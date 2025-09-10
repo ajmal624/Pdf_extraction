@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import tempfile
+import re
 
 # Optional: Set the path to tesseract if needed
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
