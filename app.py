@@ -204,6 +204,27 @@ def extract_and_clean_fields(text):
 
     return list(result.items())
 
+def final_cleaning(extracted):
+    cleaned = []
+    for field, value in extracted:
+        # Remove "on report:" prefix from Name on report
+        if field == "Name on report":
+            value = re.sub(r"^on report:\s*", "", value, flags=re.I).strip()
+
+        # Fix Appraiser Fee if value is just label
+        if field == "Appraiser Fee" and value.lower() == "appraiser fee":
+            value = ""  # or prompt user to enter manually
+
+        # Fix Scheduled date empty string to empty or placeholder
+        if field == "Scheduled date" and not value.strip():
+            value = ""  # or "N/A"
+
+        # Trim spaces
+        value = value.strip()
+
+        cleaned.append((field, value))
+    return cleaned
+
 def main():
     st.title("OCR PDF Field Extractor")
 
@@ -222,6 +243,7 @@ def main():
         st.text_area("OCR Text (debug)", text, height=300)
 
         extracted = extract_and_clean_fields(text)
+        extracted = final_cleaning(extracted)
 
         if not extracted:
             st.warning("No fields extracted.")
