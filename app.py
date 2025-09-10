@@ -26,11 +26,11 @@ def clean_text(text):
         text = text.replace(old, new)
     return text
 
-# Extract fields and values with multiline support
+# Extract fields and values by splitting text on known field names
 def extract_fields_advanced(text):
     text = clean_text(text)
 
-    # List of known fields (add variants as needed)
+    # List of known fields (adjust as needed)
     fields = [
         "How did you hear about us",
         "Date",
@@ -49,10 +49,7 @@ def extract_fields_advanced(text):
         "Scheduled time",
         "ETA",
         "Access",
-        "Name on report",
-        # Added explicit fields to catch multiline blocks
-        "Address",
-        "Appraiser",
+        "Name on report"
     ]
 
     escaped_fields = [re.escape(f) for f in fields]
@@ -65,32 +62,31 @@ def extract_fields_advanced(text):
         field_name = parts[i].strip()
         if i + 1 < len(parts):
             value = parts[i + 1].strip()
-            # Accumulate multiline values until next known field or end
-            j = i + 2
-            while j < len(parts) and not any(parts[j].strip().startswith(f) for f in fields):
-                value += " " + parts[j].strip()
-                j += 1
-            i = j - 1
         else:
             value = ""
         combined.append((field_name, value))
         i += 2
 
+    # Post-processing to merge and clean fields
     result = {}
 
+    # Helper to extract subfields from Client Information block
     def parse_client_info(text):
         name = ""
         telephone = ""
         email = ""
 
+        # Extract email
         email_match = re.search(r"[\w\.-]+@[\w\.-]+", text)
         if email_match:
             email = email_match.group(0)
 
+        # Extract phone (basic pattern)
         phone_match = re.search(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b", text)
         if phone_match:
             telephone = phone_match.group(0)
 
+        # Remove email and phone from text to get name
         name = text
         if email:
             name = name.replace(email, "")
@@ -118,6 +114,7 @@ def extract_fields_advanced(text):
             if email:
                 result["Client Email"] = email
         elif field == "Scheduled time":
+            # Extract date and time if present in value
             date_match = re.search(r"\b\d{1,2}/\d{1,2}\b|\b\w{3}-\d{1,2}\b", value)
             time_match = re.search(r"\b\d{1,2}:\d{2}\s*(am|pm)?\b", value, re.I)
             if date_match:
@@ -127,10 +124,12 @@ def extract_fields_advanced(text):
             else:
                 result["Scheduled time"] = value.strip()
         else:
+            # Remove repeated field name from value if present
             cleaned_value = re.sub(rf"^{re.escape(field)}[:\-]?\s*", "", value, flags=re.I).strip()
             if cleaned_value:
                 result[field] = cleaned_value
 
+    # Return as list of tuples for DataFrame
     return list(result.items())
 
 # Additional cleaning for slight fixes requested
@@ -154,9 +153,9 @@ def clean_extracted_data(extracted):
     return cleaned
 
 def main():
-    st.title("OCR PDF Field Extractor with Multiline Field Support")
+    st.title("OCR PDF Field Extractor with Post-Processing")
 
-    st.write("Upload an OCR-based PDF file. The app will perform OCR, extract fields (including multiline), clean and parse them, then allow CSV download.")
+    st.write("Upload an OCR-based PDF file. The app will perform OCR, extract fields, clean and parse them, then allow CSV download.")
 
     uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
 
