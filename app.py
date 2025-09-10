@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 from docx import Document
@@ -19,24 +18,20 @@ def normalize_text(text: str) -> str:
 
 def is_probable_section_title(text: str) -> bool:
     """
-    Heuristics to decide whether a short cell/paragraph is a section header/title:
-      - contains words like 'information', 'details', 'section', 'form', 'info'
-      - OR the row has exactly one non-empty cell (we treat these single-cell rows as section rows)
-    This intentionally errs on the side of skipping generic section labels, not real fields like "Date".
+    Heuristics to decide if text is a section title:
+      - Contains words like 'information', 'details', 'section', 'form', 'info'
+      - Or is short and likely a heading
     """
     if not text:
         return False
     t = text.lower()
     keywords = ['information', 'info', 'details', 'section', 'form', 'appraisal']
-    if any(k in t for k in keywords):
-        return True
-    # also treat lines that look like big titles: more than 1 word but short and ends with ':'? (we treat those as not section)
-    return False
+    return any(k in t for k in keywords)
 
 def extract_from_table(table):
     """
     Walk through a table row-by-row and extract (field, value) pairs.
-    Handles rows where many cells are present and multiple field/value pairs appear in the same row.
+    Handles rows with multiple field/value pairs.
     """
     pairs = []
     for row in table.rows:
@@ -45,154 +40,114 @@ def extract_from_table(table):
         if not non_empty:
             continue
 
-        # If the row only contains a single non-empty cell it's likely a section header -> skip
+        # Skip single-cell rows if they look like a section header
         if len(non_empty) == 1 and is_probable_section_title(non_empty[0]):
             continue
 
-        # Now parse the sequence of non-empty items left-to-right into (field, value) pairs:
+        # Parse sequentially: (field, value) pairs
         i = 0
         while i < len(non_empty):
             text = non_empty[i]
-
-            # skip probable section titles if they appear in-line
             if is_probable_section_title(text):
                 i += 1
                 continue
 
-            # take the current cell as field, next cell as value (if exists)
             field = text
             value = non_empty[i + 1] if (i + 1) < len(non_empty) else ""
-            # If value itself looks like a section title (rare), skip the pair and continue
-            if is_probable_section_title(value) and not value:
-                i += 1
-                continue
-
             pairs.append((field, value))
-            i += 2  # move to next possible pair
+            i += 2
     return pairs
 
 def extract_from_paragraphs(paragraphs):
     """
-    Extract field:value from paragraphs using colon split.
-    Skip short lines that look like section titles (no colon and short).
+    Extract field:value pairs from paragraphs with colons.
     """
     pairs = []
     for p in paragraphs:
         line = normalize_text(p)
         if not line:
             continue
-        # If it has a colon, treat as field:value
         if ":" in line:
             field, value = line.split(":", 1)
             field, value = normalize_text(field), normalize_text(value)
-            # skip section-looking fields
             if field and not is_probable_section_title(field):
                 pairs.append((field, value))
-        else:
-            # skip short lines likely to be section headers; keep longer lines only if they look like a value for a previous field
-            words = line.split()
-            if len(words) > 6:
-                # treat as possible unlabeled value (rare). We skip to avoid 'Unlabeled' columns.
-                # If you'd like these attached to last field, we could implement that behavior.
-                pass
     return pairs
 
-# ---------- Main extraction function ----------
 def extract_docx_auto(docx_file):
     doc = Document(docx_file)
-    # collect pairs
-    collected = []
+    pairs = []
 
-    # 1) Tables (first, because forms often use tables)
+    # Extract from tables
     for table in doc.tables:
-        collected.extend(extract_from_table(table))
+        pairs.extend(extract_from_table(table))
 
-    # 2) Paragraphs
+    # Extract from paragraphs
     paragraph_texts = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
-    collected.extend(extract_from_paragraphs(paragraph_texts))
+    pairs.extend(extract_from_paragraphs(paragraph_texts))
 
-    # Normalize keys and keep last-occurrence for duplicates (typical expectation)
-    cleaned = []
-    for k, v in collected:
-        key = normalize_text(k)
-        val = normalize_text(v)
-        # ignore obvious section headings accidentally left
-        if not key:
-            continue
-        if is_probable_section_title(key):
-            continue
-        cleaned.append((key, val))
+    # Clean & deduplicate
+    cleaned = {}
+    for k, v in pairs:
+        k, v = normalize_text(k), normalize_text(v)
+        if k and v and not is_probable_section_title(k):
+            cleaned[k] = v
 
-    # dedupe keeping last value
-    ordered = {}
-    for k, v in cleaned:
-        ordered[k] = v
-
-    # return as list of pairs (for editing) and as single-row dict
-    pairs = list(ordered.items())
-    row_dict = ordered  # field -> value
-    return pairs, row_dict
+    pairs = list(cleaned.items())
+    return pairs, cleaned
 
 # ---------- Streamlit UI ----------
-st.title("DOCX → Clean CSV (auto-detect section headers)")
+st.title("DOCX → Clean CSV Extractor")
 
 uploaded = st.file_uploader("Upload a DOCX file", type=["docx"])
 if not uploaded:
-    st.info("Upload a .docx file and I'll try to extract fields and values into a clean CSV.")
+    st.info("Upload a .docx file to extract fields and values into a clean CSV.")
     st.stop()
 
 pairs, row_dict = extract_docx_auto(uploaded)
 
-st.markdown("### Detected Field → Value pairs (edit or remove rows if needed)")
+st.markdown("### Detected Field → Value pairs (edit if needed)")
 if pairs:
     pairs_df = pd.DataFrame(pairs, columns=["Field", "Value"])
 else:
     pairs_df = pd.DataFrame(columns=["Field", "Value"])
 
-# allow user to edit the detected pairs
-edited = st.experimental_data_editor(pairs_df, num_rows="dynamic")
+# Allow editing of field-value pairs
+edited = st.data_editor(pairs_df, num_rows="dynamic")
 
-# Button to build final single-row table
 if st.button("Build final table and download CSV"):
-    # Validate: drop empty fields
+    # Drop empty fields
     edited = edited.dropna(subset=["Field"]).copy()
     edited["Field"] = edited["Field"].astype(str).map(normalize_text)
     edited["Value"] = edited["Value"].astype(str).map(normalize_text)
 
-    # Build a single-row DataFrame where columns are fields
+    # Convert to single-row DataFrame
     final_dict = {}
     for _, r in edited.iterrows():
-        k = r["Field"]
-        v = r["Value"]
-        if k:
-            final_dict[k] = v
+        if r["Field"]:
+            final_dict[r["Field"]] = r["Value"]
 
     if not final_dict:
-        st.error("No valid field/value pairs found. Try editing the table to add fields, or upload another file.")
+        st.error("No valid data found. Please edit the table or upload another DOCX.")
     else:
         final_df = pd.DataFrame([final_dict])
-        st.markdown("### Final single-row table (fields are columns)")
+        st.markdown("### Final Table")
         st.dataframe(final_df)
 
-        # prepare CSV
+        # Prepare CSV
         buffer = io.StringIO()
         final_df.to_csv(buffer, index=False)
-        b = buffer.getvalue().encode("utf-8")
-
         st.download_button(
-            "Download CSV",
-            data=b,
+            label="Download CSV",
+            data=buffer.getvalue().encode("utf-8"),
             file_name="extracted_doc.csv",
             mime="text/csv"
         )
 
-# show a helpful note about heuristics
-st.markdown(
-    """
-    **Notes on heuristics**
-    - The app skips probable section headers (e.g. "Client Information", "Property Information") using keyword heuristics rather than a fixed list.
-    - Table rows that contain multiple (field, value) pairs are parsed left-to-right.  
-    - If the automatic parsing still creates noisy columns, edit the pairs above and then click **Build final table and download CSV**.
-    - If you'd like automatic attachment of orphan lines (multi-line values) to the previous field, I can add that behavior — say so and I'll provide an updated version.
-    """
-)
+st.markdown("""
+**How it works:**  
+- Extracts text from tables and paragraphs  
+- Auto-detects and skips section headers (not hardcoded)  
+- Lets you edit data before saving  
+- Produces **one clean row per document**
+""")
