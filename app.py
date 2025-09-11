@@ -1,91 +1,74 @@
 import streamlit as st
-import cv2
 import pytesseract
 from PIL import Image
-import numpy as np
 import pandas as pd
+import re
 import io
 
-# Set path to tesseract executable
-pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'  # Linux/Mac
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Windows
+# Clean the OCR text to remove unwanted characters and normalize spaces
+def clean_text(text):
+    text = re.sub(r'[^\x00-\x7F]+',' ', text)  # Remove non-ASCII chars
+    text = re.sub(r'\s+', ' ', text)  # Normalize spaces
+    return text.strip()
 
-def preprocess_image(image):
-    image = np.array(image)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
-    denoised = cv2.medianBlur(thresh, 3)
-    processed = cv2.bitwise_not(denoised)
-    return processed
+# Dynamically extract field-value pairs from the cleaned text
+def extract_fields(text):
+    lines = text.splitlines()
+    pairs = []
 
-def extract_text(image):
-    processed = preprocess_image(image)
-    custom_config = r'--oem 3 --psm 6'
-    text = pytesseract.image_to_string(processed, config=custom_config)
-    return text, processed
-
-def parse_text_to_fields(text):
-    # Basic parsing by looking for common field names
-    lines = text.split('\n')
-    fields = {}
-    current_key = None
-    current_value = ""
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        if any(keyword in line.lower() for keyword in ["name", "email", "telephone", "address", "date", "fee", "scheduled time", "reason", "commercial", "mixed", "notes"]):
-            if current_key:
-                fields[current_key] = current_value.strip()
-            if ':' in line:
-                parts = line.split(":", 1)
-                current_key = parts[0].strip()
-                current_value = parts[1].strip()
-            else:
-                current_key = line.strip()
-                current_value = ""
+        # Try to split by common separators
+        if ':' in line:
+            parts = line.split(':', 1)
+            field = parts[0].strip()
+            value = parts[1].strip()
+            pairs.append((field, value))
+        elif '|' in line:
+            parts = line.split('|', 1)
+            field = parts[0].strip()
+            value = parts[1].strip()
+            pairs.append((field, value))
         else:
-            current_value += " " + line
-    if current_key:
-        fields[current_key] = current_value.strip()
-    return fields
+            # Heuristic: treat line as field if it looks like a question or label
+            if re.search(r'(Name|Email|Date|Address|Reason|Fee|Scheduled|report)', line, re.IGNORECASE):
+                pairs.append((line, ""))
+            else:
+                # If previous line exists, append as value
+                if pairs:
+                    prev_field, prev_value = pairs[-1]
+                    # Append this line to the previous value
+                    new_value = prev_value + " " + line if prev_value else line
+                    pairs[-1] = (prev_field, new_value.strip())
+                else:
+                    pairs.append((line, ""))
+    return pairs
 
-def convert_dict_to_csv(fields):
-    df = pd.DataFrame([fields])
-    csv_buffer = io.StringIO()
-    df.to_csv(csv_buffer, index=False)
-    return csv_buffer.getvalue()
+# Streamlit interface
+st.title("Dynamic OCR Field Extractor")
 
-def main():
-    st.title("📄 Appraisal Document OCR Extractor")
+uploaded_file = st.file_uploader("Upload an image file", type=["png", "jpg", "jpeg"])
 
-    uploaded_file = st.file_uploader("Upload an image file", type=["png", "jpg", "jpeg"])
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Image", use_column_width=True)
+if uploaded_file:
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Uploaded Image", use_column_width=True)
+    
+    with st.spinner("Extracting and cleaning text..."):
+        raw_text = pytesseract.image_to_string(image)
+        cleaned = clean_text(raw_text)
+        extracted = extract_fields(cleaned)
+    
+    st.subheader("Extracted Fields")
+    df = pd.DataFrame(extracted, columns=["Field", "Value"])
+    st.dataframe(df)
 
-        with st.spinner("Processing..."):
-            text, processed_image = extract_text(image)
-
-        st.subheader("✅ Extracted Text")
-        st.text_area("OCR Output", text, height=300)
-
-        st.subheader("🖼 Preprocessed Image")
-        st.image(processed_image, caption="Preprocessed Image", use_column_width=True)
-
-        # Parse text into fields
-        fields = parse_text_to_fields(text)
-        st.subheader("📋 Extracted Fields")
-        st.json(fields)
-
-        # Convert to CSV and provide download button
-        csv_data = convert_dict_to_csv(fields)
-        st.download_button(
-            label="📥 Download as CSV",
-            data=csv_data,
-            file_name="extracted_data.csv",
-            mime="text/csv"
-        )
-
-if __name__ == "__main__":
-    main()
+    # Convert to CSV
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download as CSV",
+        data=csv,
+        file_name="extracted_fields.csv",
+        mime="text/csv"
+    )
