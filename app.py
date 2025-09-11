@@ -9,7 +9,8 @@ import os
  
 
 
-HF_API_KEY = "HF_API_KEY"   # Store in Streamlit Secrets
+HF_API_KEY = st.secrets["HF_API_KEY"]
+   # Store in Streamlit Secrets
 
 
  
