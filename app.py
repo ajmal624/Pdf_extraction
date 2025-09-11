@@ -4,8 +4,6 @@ from PIL import Image
 from transformers import LayoutLMProcessor, LayoutLMForTokenClassification
 import torch
 import csv
-import tempfile
-
 # Load model and processor once at startup
 @st.cache_resource
 def load_model():
