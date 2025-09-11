@@ -1,37 +1,44 @@
 import streamlit as st
+import easyocr
 from PIL import Image
-import pytesseract
 import pandas as pd
 import tempfile
 
-# Title of the app
-st.title("Image Text Extraction with OCR")
+# Title
+st.title("Image OCR Text Extraction")
 
-# File uploader widget
-uploaded_file = st.file_uploader("Upload an image file", type=["png", "jpg", "jpeg"])
+# File uploader
+uploaded_file = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
-    # Open and display the uploaded image
+    # Display image
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # OCR extraction button
     if st.button("Extract Text"):
         with st.spinner("Extracting text..."):
-            # Use pytesseract to extract text
-            extracted_text = pytesseract.image_to_string(image)
+            # Initialize EasyOCR reader (only once)
+            reader = easyocr.Reader(['en'], gpu=False)
 
-            # Process text into lines and create a DataFrame
-            lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
-            df = pd.DataFrame(lines, columns=["Extracted Text"])
+            # Perform OCR
+            result = reader.readtext(uploaded_file.getvalue())
 
-            # Show the extracted text
+            # Extract text lines
+            extracted_data = []
+            for res in result:
+                text = res[1]
+                extracted_data.append(text)
+
+            # Create DataFrame
+            df = pd.DataFrame(extracted_data, columns=["Extracted Text"])
+
+            # Display extracted text
             st.dataframe(df)
 
-            # Save DataFrame to CSV and provide download link
+            # Save to CSV and provide download
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".csv") as tmp_file:
                 df.to_csv(tmp_file.name, index=False)
                 tmp_file_path = tmp_file.name
 
-            st.success("Text extraction complete!")
+            st.success("Extraction complete!")
             st.download_button("Download CSV", data=open(tmp_file_path, "rb"), file_name="extracted_text.csv")
