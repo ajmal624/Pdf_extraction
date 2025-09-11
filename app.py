@@ -84,9 +84,12 @@ def main():
             st.warning("No fields extracted.")
             return
 
-        df = pd.DataFrame(list(extracted_data.items()), columns=["Field", "Value"])
+        # Invert keys and values: values become columns, fields become row values
+        inverted_data = {v: k for k, v in extracted_data.items() if v}
 
-        st.subheader("Extracted Fields and Values")
+        df = pd.DataFrame([inverted_data])
+
+        st.subheader("Extracted Values as Columns, Fields as Row Values")
         st.dataframe(df)
 
         csv_buffer = StringIO()
@@ -96,7 +99,7 @@ def main():
         st.download_button(
             label="Download CSV",
             data=csv_data,
-            file_name="extracted_fields.csv",
+            file_name="extracted_fields_inverted.csv",
             mime="text/csv"
         )
 
