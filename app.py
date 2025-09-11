@@ -2,15 +2,6 @@ import streamlit as st
 from PIL import Image
 import pytesseract
 import csv
-import os
-
-# Try importing transformers and torch; fallback if not available
-try:
-    from transformers import LayoutLMProcessor, LayoutLMForTokenClassification
-    import torch
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
 
 st.title("Document OCR Extraction App")
 
@@ -43,12 +34,3 @@ if uploaded_file is not None:
 
             st.success(f"Text extraction complete! Saved as {csv_filename}")
             st.download_button("Download CSV", open(csv_filename, "rb"), file_name=csv_filename)
-
-            # --- Transformers Section (Optional) ---
-            if TRANSFORMERS_AVAILABLE:
-                st.info("Transformers are available. You can now implement LayoutLM extraction.")
-                # Example placeholder for transformers usage
-                # processor = LayoutLMProcessor.from_pretrained("microsoft/layoutlm-base-uncased")
-                # model = LayoutLMForTokenClassification.from_pretrained("microsoft/layoutlm-base-uncased")
-            else:
-                st.warning("Transformers or torch not available. Skipping advanced extraction.")
