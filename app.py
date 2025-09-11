@@ -1,44 +1,122 @@
 import streamlit as st
-import easyocr
-from PIL import Image
+import pytesseract
+from pdf2image import convert_from_path
 import pandas as pd
-import tempfile
-
-# Title
-st.title("Image OCR Text Extraction")
-
-# File uploader
-uploaded_file = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
-
-if uploaded_file is not None:
-    # Display image
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_column_width=True)
-
-    if st.button("Extract Text"):
-        with st.spinner("Extracting text..."):
-            # Initialize EasyOCR reader (only once)
-            reader = easyocr.Reader(['en'], gpu=False)
-
-            # Perform OCR
-            result = reader.readtext(uploaded_file.getvalue())
-
-            # Extract text lines
-            extracted_data = []
-            for res in result:
-                text = res[1]
-                extracted_data.append(text)
-
-            # Create DataFrame
-            df = pd.DataFrame(extracted_data, columns=["Extracted Text"])
-
-            # Display extracted text
-            st.dataframe(df)
-
-            # Save to CSV and provide download
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".csv") as tmp_file:
-                df.to_csv(tmp_file.name, index=False)
-                tmp_file_path = tmp_file.name
-
-            st.success("Extraction complete!")
-            st.download_button("Download CSV", data=open(tmp_file_path, "rb"), file_name="extracted_text.csv")
+import re
+from PIL import Image
+ 
+# ---------------------------------------------------------
+# Streamlit Page Config
+# ---------------------------------------------------------
+st.set_page_config(page_title="OCR to CSV Extractor", page_icon="📄")
+ 
+st.title("📄 OCR to CSV Extractor")
+st.write("Upload a scanned PDF or image. Extracts fields and exports to CSV.")
+ 
+# ---------------------------------------------------------
+# Helper Function
+# ---------------------------------------------------------
+def parse_fields(text: str) -> dict:
+    fields = {
+        "Date": "",
+        "Name": "",
+        "Telephone": "",
+        "Email": "",
+        "Address": "",
+        "Type": "",
+        "Reason for Appraisal": "",
+        "Appraiser Fee": "",
+        "Scheduled Date": "",
+        "Scheduled Time": "",
+    }
+ 
+    # Date
+    match = re.search(r"Date[:\s]*([\d/]+)", text, re.IGNORECASE)
+    if match:
+        fields["Date"] = match.group(1).strip()
+ 
+    # Telephone
+    match = re.search(r"(\d{3}[-\s]\d{3}[-\s]\d{4})", text)
+    if match:
+        fields["Telephone"] = match.group(1).strip()
+ 
+    # Email
+    match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
+    if match:
+        fields["Email"] = match.group(0).strip()
+ 
+    # Name (line before Telephone)
+    if fields["Telephone"]:
+        tel_index = text.find(fields["Telephone"])
+        before_tel = text[:tel_index].splitlines()
+        for line in reversed(before_tel):
+            if line.strip() and not any(x in line.lower() for x in ["client information", "name", "telephone", "email"]):
+                fields["Name"] = line.strip()
+                break
+ 
+    # Address (capture up to Liberty, NY + ZIP)
+    match = re.search(r"(\d+\s?[A-Za-z]+\s+.*Liberty,\s*NY\s*\d{5})", text, re.IGNORECASE)
+    if match:
+        addr = match.group(1).strip()
+        zip_match = re.search(r"\d{5}", addr)
+        if zip_match:
+            addr = addr[: zip_match.end()]
+        fields["Address"] = addr
+ 
+    # Type
+    match = re.search(r"(Commercial|Mixed)", text, re.IGNORECASE)
+    if match:
+        fields["Type"] = match.group(1).strip()
+ 
+    # Reason for Appraisal
+    match = re.search(r"Reason.*?\n(.*)", text, re.IGNORECASE | re.DOTALL)
+    if match:
+        fields["Reason for Appraisal"] = match.group(1).strip()
+ 
+    # Appraiser Fee
+    match = re.search(r"\$[0-9,]+.*", text)
+    if match:
+        fields["Appraiser Fee"] = match.group(0).strip()
+ 
+    # Scheduled Date
+    match = re.search(r"(\d{1,2}/\d{1,2}(?:/\d{2,4})?)", text)
+    if match:
+        date_val = match.group(1)
+        if date_val != fields["Date"]:  # avoid duplicate with top date
+            fields["Scheduled Date"] = date_val
+ 
+    # Scheduled Time
+    match = re.search(r"(\d{1,2}:\d{2}\s*(?:am|pm))", text, re.IGNORECASE)
+    if match:
+        fields["Scheduled Time"] = match.group(1).strip()
+ 
+    return fields
+ 
+# ---------------------------------------------------------
+# File Uploader
+# ---------------------------------------------------------
+uploaded_file = st.file_uploader("Upload PDF/Image", type=["pdf", "jpg", "jpeg", "png"])
+ 
+if uploaded_file:
+    text = ""
+ 
+    if uploaded_file.type == "application/pdf":
+        pages = convert_from_path(uploaded_file, dpi=300)
+        for page in pages:
+            text += pytesseract.image_to_string(page)
+    else:
+        image = Image.open(uploaded_file)
+        text = pytesseract.image_to_string(image)
+ 
+    st.subheader("📑 Extracted Text (Raw)")
+    st.text(text)
+ 
+    fields = parse_fields(text)
+    df = pd.DataFrame([fields])
+ 
+    st.subheader("📊 Extracted Data (Structured)")
+    st.dataframe(df)
+ 
+    # CSV download
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CSV", csv, "output.csv", "text/csv")
