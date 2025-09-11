@@ -1,83 +1,54 @@
 import streamlit as st
-import pytesseract
 from PIL import Image
-from transformers import LayoutLMProcessor, LayoutLMForTokenClassification
-import torch
+import pytesseract
 import csv
+import os
 
-st.title("Document Field Extraction")
+# Try importing transformers and torch; fallback if not available
+try:
+    from transformers import LayoutLMProcessor, LayoutLMForTokenClassification
+    import torch
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
 
-uploaded_file = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
+st.title("Document OCR Extraction App")
+
+uploaded_file = st.file_uploader("Upload an image file", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    processor = LayoutLMProcessor.from_pretrained("microsoft/layoutlm-base-uncased")
-    model = LayoutLMForTokenClassification.from_pretrained("microsoft/layoutlm-base-uncased")
+    if st.button("Extract Text"):
+        with st.spinner("Processing..."):
+            # --- Run OCR ---
+            ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
 
-    ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+            words = []
+            for i in range(len(ocr_data["text"])):
+                text = ocr_data["text"][i].strip()
+                if text:
+                    words.append(text)
 
-    words = []
-    boxes = []
-    for i in range(len(ocr_data["text"])):
-        text = ocr_data["text"][i].strip()
-        if text:
-            words.append(text)
-            x, y, w, h = ocr_data["left"][i], ocr_data["top"][i], ocr_data["width"][i], ocr_data["height"][i]
-            width, height = image.size
-            box = [
-                int(1000 * x / width),
-                int(1000 * y / height),
-                int(1000 * (x + w) / width),
-                int(1000 * (y + h) / height)
-            ]
-            boxes.append(box)
+            extracted_text = " ".join(words)
+            st.text_area("Extracted Text", extracted_text, height=300)
 
-    encoding = processor(images=image, words=words, boxes=boxes, return_tensors="pt", truncation=True, padding="max_length")
-    outputs = model(**encoding)
-    logits = outputs.logits
-    predictions = torch.argmax(logits, dim=2)
-    labels = predictions[0].tolist()
-    id2label = model.config.id2label
+            # --- Save to CSV ---
+            csv_filename = "extracted_fields.csv"
+            with open(csv_filename, mode="w", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                writer.writerow(["Field", "Value"])
+                writer.writerow(["Extracted Text", extracted_text])
 
-    fields = []
-    current_field = ""
-    current_value = ""
-    current_label = None
+            st.success(f"Text extraction complete! Saved as {csv_filename}")
+            st.download_button("Download CSV", open(csv_filename, "rb"), file_name=csv_filename)
 
-    for word, label_id in zip(words, labels):
-        label = id2label[label_id]
-        if label.startswith("B-") or label.startswith("I-"):
-            label_type = label.split("-")[1]
-            if label_type != current_label:
-                if current_field or current_value:
-                    fields.append((current_field.strip(), current_value.strip()))
-                current_field = word if label_type == "QUESTION" else ""
-                current_value = word if label_type == "ANSWER" else ""
-                current_label = label_type
+            # --- Transformers Section (Optional) ---
+            if TRANSFORMERS_AVAILABLE:
+                st.info("Transformers are available. You can now implement LayoutLM extraction.")
+                # Example placeholder for transformers usage
+                # processor = LayoutLMProcessor.from_pretrained("microsoft/layoutlm-base-uncased")
+                # model = LayoutLMForTokenClassification.from_pretrained("microsoft/layoutlm-base-uncased")
             else:
-                if label_type == "QUESTION":
-                    current_field += " " + word
-                else:
-                    current_value += " " + word
-        else:
-            if current_field or current_value:
-                fields.append((current_field.strip(), current_value.strip()))
-            current_field = ""
-            current_value = ""
-            current_label = None
-
-    if current_field or current_value:
-        fields.append((current_field.strip(), current_value.strip()))
-
-    # Save to CSV
-    csv_file = "extracted_fields.csv"
-    with open(csv_file, mode="w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(["Field", "Value"])
-        for field, value in fields:
-            writer.writerow([field, value])
-
-    st.download_button("Download CSV", data=open(csv_file, "r").read(), file_name=csv_file)
-    st.success("Extraction completed!")
+                st.warning("Transformers or torch not available. Skipping advanced extraction.")
