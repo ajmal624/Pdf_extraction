@@ -50,21 +50,17 @@ def parse_line_to_pairs(line):
 def extract_fields(text):
     text = clean_text(text)
     lines = text.splitlines()
-    data = {}
+    data = []
 
     for line in lines:
         pairs = parse_line_to_pairs(line)
         for field, value in pairs:
-            # If field already exists, append value separated by space
-            if field in data and value:
-                data[field] += " " + value
-            else:
-                data[field] = value
+            data.append((field, value))
 
     return data
 
 def main():
-    st.title("Improved OCR PDF Field Extractor")
+    st.title("OCR PDF Field-Value Extractor")
 
     uploaded_file = st.file_uploader("Upload PDF file", type=["pdf"])
 
@@ -78,18 +74,16 @@ def main():
             st.error("No text found after OCR.")
             return
 
-        extracted_data = extract_fields(text)
+        extracted_pairs = extract_fields(text)
 
-        if not extracted_data:
+        if not extracted_pairs:
             st.warning("No fields extracted.")
             return
 
-        # Invert keys and values: values become columns, fields become row values
-        inverted_data = {v: k for k, v in extracted_data.items() if v}
+        # Create DataFrame with two columns: Field and Value
+        df = pd.DataFrame(extracted_pairs, columns=["Field", "Value"])
 
-        df = pd.DataFrame([inverted_data])
-
-        st.subheader("Extracted Values as Columns, Fields as Row Values")
+        st.subheader("Extracted Fields and Values")
         st.dataframe(df)
 
         csv_buffer = StringIO()
@@ -99,7 +93,7 @@ def main():
         st.download_button(
             label="Download CSV",
             data=csv_data,
-            file_name="extracted_fields_inverted.csv",
+            file_name="extracted_fields_values.csv",
             mime="text/csv"
         )
 
