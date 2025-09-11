@@ -1,46 +1,37 @@
 import streamlit as st
-import easyocr
-import pandas as pd
 from PIL import Image
-import numpy as np
-import cv2
+import pytesseract
+import pandas as pd
 import tempfile
 
-st.title("OCR Extraction App using EasyOCR")
+# Title of the app
+st.title("Image Text Extraction with OCR")
 
+# File uploader widget
 uploaded_file = st.file_uploader("Upload an image file", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
+    # Open and display the uploaded image
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
+    # OCR extraction button
     if st.button("Extract Text"):
-        with st.spinner("Running OCR..."):
-            # Convert image to numpy array
-            image_np = np.array(image)
+        with st.spinner("Extracting text..."):
+            # Use pytesseract to extract text
+            extracted_text = pytesseract.image_to_string(image)
 
-            # Convert RGB to BGR for OpenCV
-            image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+            # Process text into lines and create a DataFrame
+            lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
+            df = pd.DataFrame(lines, columns=["Extracted Text"])
 
-            # Initialize EasyOCR reader
-            reader = easyocr.Reader(['en'], gpu=False)
-
-            # Perform OCR
-            results = reader.readtext(image_cv)
-
-            # Prepare data for display and saving
-            data = []
-            for bbox, text, prob in results:
-                data.append({"Text": text, "Confidence": round(prob, 2)})
-
-            df = pd.DataFrame(data)
-
+            # Show the extracted text
             st.dataframe(df)
 
-            # Save as CSV
+            # Save DataFrame to CSV and provide download link
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".csv") as tmp_file:
                 df.to_csv(tmp_file.name, index=False)
                 tmp_file_path = tmp_file.name
 
-            st.success("OCR extraction completed!")
-            st.download_button("Download CSV", data=open(tmp_file_path, "rb"), file_name="ocr_output.csv")
+            st.success("Text extraction complete!")
+            st.download_button("Download CSV", data=open(tmp_file_path, "rb"), file_name="extracted_text.csv")
