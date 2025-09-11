@@ -1,5 +1,8 @@
-streamlit 
-
-pypdf 
-
+streamlit
+pandas
+pytesseract
+pdfplumber
+pdf2image
+openai
+PyPDF2
 requests 
