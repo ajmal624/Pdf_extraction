@@ -1,4 +1,5 @@
-streamlit==1.22.0
-pillow==9.5.0
-pandas==1.5.3
-easyocr==1.6.2
+streamlit 
+
+pypdf 
+
+requests 
