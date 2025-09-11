@@ -3,4 +3,5 @@ pytesseract
 opencv-python-headless
 numpy
 pandas
+pdf2image
 
