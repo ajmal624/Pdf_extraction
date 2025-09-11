@@ -4,4 +4,4 @@ opencv-python-headless
 numpy
 pandas
 pdf2image
-git+https://github.com/username/gemma3.git
+
